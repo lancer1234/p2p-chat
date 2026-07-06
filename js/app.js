@@ -5,11 +5,10 @@ import { NostrManager } from './nostr.js';
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
 let currentFriendPk = null;
-let nostr = new NostrManager('wss://nos.lol'); // 把 wss://relay.damus.io 改成 wss://nos.lol
+let nostr = new NostrManager('wss://nos.lol');
 
 // 初始化或生成 Nostr 金鑰
 if (!myKeyPair.sk || !myKeyPair.pk) {
-    // 修正為新版 nostr-tools 的正確全域 API
     const sk = window.NostrTools.generatePrivateKey();
     const pk = window.NostrTools.getPublicKey(sk);
     Storage.saveKeyPair(sk, pk);
@@ -30,7 +29,6 @@ document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 function startAsInitiator() {
     alert("正在建立 WebRTC 連線，請稍候...");
     
-    // 修正點：使用 window.SimplePeer
     p2pPeer = new window.SimplePeer({
         initiator: true,
         trickle: false,
@@ -45,19 +43,13 @@ function startAsInitiator() {
         };
         
         const qrContent = JSON.stringify(connectionPackage);
-        const container = document.getElementById('qrcode-container');
-        container.innerHTML = '<h3>請對方掃描此 QR Code：</h3>';
-        const canvas = document.createElement('canvas');
-        container.appendChild(canvas);
         
-        // 建立 QR Code 物件
+        // 修正點：只保留一次宣告，並直接使用新套件生成 img 標籤
+        const container = document.getElementById('qrcode-container');
         const qr = window.qrcode(0, 'M');
         qr.addData(qrContent);
         qr.make();
-
-        // 產生圖片標籤並塞入容器
-        const container = document.getElementById('qrcode-container');
-        container.innerHTML = '<h3>請對方掃描此 QR Code：</h3>' + qr.createImgTag(5); // 直接生成圖片標籤
+        container.innerHTML = '<h3>請對方掃描此 QR Code：</h3>' + qr.createImgTag(5);
 
         startCameraScanForAnswer();
     });
@@ -68,7 +60,6 @@ function startAsInitiator() {
 function startCameraScan() {
     document.getElementById('reader').style.display = 'block';
 
-    // 修正點：使用 window.Html5Qrcode
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
     html5QrcodeScanner.start(
         { facingMode: "environment" },
@@ -93,7 +84,6 @@ function startCameraScan() {
 function handleIncomingOffer(offerPackage) {
     currentFriendPk = offerPackage.pubkey;
 
-    // 修正點：使用 window.SimplePeer
     p2pPeer = new window.SimplePeer({
         initiator: false,
         trickle: false,
@@ -112,21 +102,16 @@ function handleIncomingOffer(offerPackage) {
         const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
         Storage.saveFriend(currentFriendPk, sharedSecret, "當面加的好友");
 
+        // 修正點：整合變數，移除重複宣告，修正大括號
         const container = document.getElementById('qrcode-container');
-        container.innerHTML = '<h3>請發起方掃描此回應 QR Code：</h3>';
-        const canvas = document.createElement('canvas');
-        container.appendChild(canvas);
-        // 建立 QR Code 物件
         const qr = window.qrcode(0, 'M');
         qr.addData(JSON.stringify(answerPackage));
         qr.make();
-
-        // 產生圖片標籤並塞入容器
-        const container = document.getElementById('qrcode-container');
         container.innerHTML = '<h3>請發起方掃描此回應 QR Code：</h3>' + qr.createImgTag(5);
+    });
 
     setupPeerEvents();
-}
+} // 修正點：補上原本遺漏的結束括號
 
 function startCameraScanForAnswer() {
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
