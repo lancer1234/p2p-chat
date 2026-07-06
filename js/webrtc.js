@@ -1,9 +1,10 @@
-// 使用 simple-peer 庫
+// 使用 CDN 載入的全域 simple-peer 庫
 export function createP2PConnection(isInitiator, onSignal, onConnect, onData) {
-  const p = new SimplePeer({
+  // 修正點：改用 window.SimplePeer，並將 config 設為 undefined 實現真正零伺服器本地秒出碼
+  const p = new window.SimplePeer({
     initiator: isInitiator, // A 是 true, B 是 false
-    trickle: false,         // 關閉 trickle 以便將所有 ICE 候選整合進單一 SDP，方便做成 QR Code
-    config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] } // 使用 Google 免費 STUN
+    trickle: false,         // 關閉 trickle 以便將所有 ICE 候選整合進單一 SDP
+    config: undefined       // 當面掃碼不依賴 STUN 伺服器，速度最快
   });
 
   p.on('signal', data => {
