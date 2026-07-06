@@ -34,7 +34,7 @@ function startAsInitiator() {
     p2pPeer = new window.SimplePeer({
         initiator: true,
         trickle: false,
-        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+        config: undefined
     });
 
     p2pPeer.on('signal', async (webrtcData) => {
@@ -92,7 +92,7 @@ function handleIncomingOffer(offerPackage) {
     p2pPeer = new window.SimplePeer({
         initiator: false,
         trickle: false,
-        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+        config: undefined
     });
 
     p2pPeer.signal(offerPackage.sdp);
@@ -153,7 +153,7 @@ async function triggerNostrReconnect() {
     p2pPeer = new window.SimplePeer({
         initiator: true,
         trickle: false,
-        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+        config: undefined
     });
 
     p2pPeer.on('signal', async (newWebrtcData) => {
