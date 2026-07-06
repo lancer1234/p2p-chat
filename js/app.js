@@ -134,7 +134,7 @@ function startCameraScanForAnswer() {
             } catch (e) { console.error(e); }
         },
         () => {}
-    );
+    ).catch(err => console.error("Answer 相機啟動失敗", err)); // 修正點：補齊了原本殘缺的結構與括號
 }
 
 async function triggerNostrReconnect() {
