@@ -50,9 +50,13 @@ function startAsInitiator() {
         const canvas = document.createElement('canvas');
         container.appendChild(canvas);
         
-        const qr = qrcode(0, 'M');
+        // 建立 QR Code 物件
+        const qr = window.qrcode(0, 'M');
         qr.addData(qrContent);
         qr.make();
+
+        // 產生圖片標籤並塞入容器
+        const container = document.getElementById('qrcode-container');
         container.innerHTML = '<h3>請對方掃描此 QR Code：</h3>' + qr.createImgTag(5); // 直接生成圖片標籤
 
         startCameraScanForAnswer();
@@ -112,9 +116,13 @@ function handleIncomingOffer(offerPackage) {
         container.innerHTML = '<h3>請發起方掃描此回應 QR Code：</h3>';
         const canvas = document.createElement('canvas');
         container.appendChild(canvas);
-        const qr = qrcode(0, 'M');
+        // 建立 QR Code 物件
+        const qr = window.qrcode(0, 'M');
         qr.addData(JSON.stringify(answerPackage));
         qr.make();
+
+        // 產生圖片標籤並塞入容器
+        const container = document.getElementById('qrcode-container');
         container.innerHTML = '<h3>請發起方掃描此回應 QR Code：</h3>' + qr.createImgTag(5);
 
     setupPeerEvents();
