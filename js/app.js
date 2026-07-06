@@ -43,8 +43,6 @@ function startAsInitiator() {
         };
         
         const qrContent = JSON.stringify(connectionPackage);
-        
-        // 修正點：只保留一次宣告，並直接使用新套件生成 img 標籤
         const container = document.getElementById('qrcode-container');
         const qr = window.qrcode(0, 'M');
         qr.addData(qrContent);
@@ -102,7 +100,6 @@ function handleIncomingOffer(offerPackage) {
         const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
         Storage.saveFriend(currentFriendPk, sharedSecret, "當面加的好友");
 
-        // 修正點：整合變數，移除重複宣告，修正大括號
         const container = document.getElementById('qrcode-container');
         const qr = window.qrcode(0, 'M');
         qr.addData(JSON.stringify(answerPackage));
@@ -111,7 +108,7 @@ function handleIncomingOffer(offerPackage) {
     });
 
     setupPeerEvents();
-} // 修正點：補上原本遺漏的結束括號
+}
 
 function startCameraScanForAnswer() {
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
