@@ -112,8 +112,10 @@ function handleIncomingOffer(offerPackage) {
         container.innerHTML = '<h3>請發起方掃描此回應 QR Code：</h3>';
         const canvas = document.createElement('canvas');
         container.appendChild(canvas);
-        window.QRCode.toCanvas(canvas, JSON.stringify(answerPackage), { width: 256 });
-    });
+        const qr = qrcode(0, 'M');
+        qr.addData(JSON.stringify(answerPackage));
+        qr.make();
+        container.innerHTML = '<h3>請發起方掃描此回應 QR Code：</h3>' + qr.createImgTag(5);
 
     setupPeerEvents();
 }
