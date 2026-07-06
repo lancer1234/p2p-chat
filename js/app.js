@@ -50,9 +50,10 @@ function startAsInitiator() {
         const canvas = document.createElement('canvas');
         container.appendChild(canvas);
         
-        window.QRCode.toCanvas(canvas, qrContent, { width: 256 }, (err) => {
-            if (err) console.error(err);
-        });
+        const qr = qrcode(0, 'M');
+        qr.addData(qrContent);
+        qr.make();
+        container.innerHTML = '<h3>請對方掃描此 QR Code：</h3>' + qr.createImgTag(5); // 直接生成圖片標籤
 
         startCameraScanForAnswer();
     });
