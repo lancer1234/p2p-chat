@@ -5,7 +5,7 @@ import { NostrManager } from './nostr.js';
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
 let currentFriendPk = null;
-let nostr = new NostrManager('wss://relay.damus.io');
+let nostr = new NostrManager('wss://nos.lol'); // 把 wss://relay.damus.io 改成 wss://nos.lol
 
 // 初始化或生成 Nostr 金鑰
 if (!myKeyPair.sk || !myKeyPair.pk) {
