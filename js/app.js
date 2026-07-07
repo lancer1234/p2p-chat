@@ -7,10 +7,10 @@ let p2pPeer = null;
 let currentFriendPk = localStorage.getItem('last_chat_pk'); 
 let nostr = new NostrManager(); 
 
-// 🔐 移動端與私密轉送專用核心鎖
+// 🔐 移動端專用核心鎖
 let isNostrReady = false;
 let isReconnecting = false;
-let isInChatMode = false; // 🌟 新增狀態鎖：用來判斷使用者目前到底是在「首頁選單」還是「聊天室內」
+let isInChatMode = false; 
 
 const rtcConfig = {
     iceServers: [
@@ -33,15 +33,14 @@ nostr.connect().then(() => {
     console.log("🌐 Nostr 網路骨幹已成功通電");
     isNostrReady = true;
 
-    // 監聽所有已知好友
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
     });
 
-    // 🌟 修正點：只有當本地有歷史紀錄，且使用者不是主動退回首頁時，才全自動回復聊天
+    // 只有當本地有歷史紀錄，且不是正要重新配對時，才自動回復聊天
     if (currentFriendPk) {
-        isInChatMode = true; // 進入聊天模式
+        isInChatMode = true; 
         showChatInterface();
         restoreChatLogs();
         updateOnlineStatus(false);
@@ -52,6 +51,7 @@ nostr.connect().then(() => {
     }
 });
 
+// 監聽按鈕點擊
 document.getElementById('btn-create').addEventListener('click', startAsInitiator);
 document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 document.getElementById('btn-send').addEventListener('click', sendMessage);
@@ -71,8 +71,11 @@ function 強制銷毀舊連線實體() {
 }
 
 function startAsInitiator() {
-    // 🌟 修正點：既然要產生全新 QR Code，明確聲明目前還不是聊天模式
+    // 🌟 【超核心修正】：既然點了產生全新 QR Code，立刻強制清空上一次的快取紀錄與記憶狀態！
+    localStorage.removeItem('last_chat_pk');
+    currentFriendPk = null;
     isInChatMode = false; 
+    
     強制銷毀舊連線實體();
     
     document.getElementById('setup-container').style.display = 'none';
@@ -87,7 +90,6 @@ function startAsInitiator() {
     // 開啟全域聽筒，等待初次對接
     nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
         try {
-            // 🌟 防呆：如果我已經在跟別人聊天了，或者已經連上了，就不理會外部的新 Offer
             if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
 
             if (!authorPk) return;
@@ -116,7 +118,6 @@ function startAsInitiator() {
                 const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
                 Storage.saveFriend(currentFriendPk, sharedSecret);
                 
-                // 順利接通，解鎖進聊天室
                 isInChatMode = true;
                 showChatInterface();
                 restoreChatLogs();
@@ -126,7 +127,11 @@ function startAsInitiator() {
 }
 
 function startCameraScan() {
+    // 🌟 【超核心修正】：既然要掃描別人，也立刻洗掉舊有的配對，防範跳轉打架
+    localStorage.removeItem('last_chat_pk');
+    currentFriendPk = null;
     isInChatMode = false;
+
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
 
@@ -143,7 +148,6 @@ function startCameraScan() {
             currentFriendPk = decodedFriendPk;
             localStorage.setItem('last_chat_pk', currentFriendPk);
             
-            // 掃碼完畢，正式踏入聊天室預備狀態
             isInChatMode = true; 
             showChatInterface();
             appendMessage("已成功掃描信任密鑰，正在背景交換加密信道協議...", "system");
@@ -184,7 +188,6 @@ function listenForMessages(friendPk) {
                 return;
             }
 
-            // 💡 修正點：只有當我們此時確定在聊天模式下，才去響應重連 offer/answer
             if (!isInChatMode) return;
 
             if (data.type === 'init-answer') {
@@ -277,7 +280,7 @@ function updateOnlineStatus(isOnline) {
 async function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
     
-    isInChatMode = false; // 退出聊天模式
+    isInChatMode = false; 
 
     if (currentFriendPk && isNostrReady) {
         try {
@@ -289,7 +292,7 @@ async function leaveChat() {
 
     強制銷毀舊連線實體();
     if (currentFriendPk) Storage.clearSession(currentFriendPk);
-    localStorage.removeItem('last_chat_pk'); // 確實拔除紀錄
+    localStorage.removeItem('last_chat_pk'); 
     location.href = location.pathname;
 }
 
@@ -319,7 +322,6 @@ function setupPeerEvents() {
 }
 
 async function triggerNostrReconnect() {
-    // 🌟 修正點：如果不在聊天模式下（比如正在看首頁或準備配對），嚴行禁止觸發重連，防堵 UI 被篡改
     if (!isInChatMode || !currentFriendPk || !isNostrReady || isReconnecting) return;
     
     if (p2pPeer && p2pPeer.connected) {
@@ -346,7 +348,6 @@ async function triggerNostrReconnect() {
     });
 }
 
-// 💡 守護常駐心跳偵測：只有在聊天模式內才會執行斷線重連檢查
 setInterval(() => {
     if (isInChatMode && currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
         console.log("🔍 心跳排查：直連中斷，雙向主動提議發動中...");
