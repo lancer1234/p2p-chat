@@ -1,5 +1,5 @@
 export class NostrManager {
-  // 核心修正：改用 Damus 官方骨幹節點，這是在台灣響應速度最快、且絕對沒有 PoW 挖礦阻攔的頂級伺服器
+  // 採用 Damus 官方骨幹節點
   constructor(relayUrl = 'wss://relay.damus.io') {
     this.relayUrl = relayUrl;
     this.relay = null;
@@ -22,7 +22,7 @@ export class NostrManager {
     try {
       const hexSk = typeof mySk === 'string' ? mySk : window.NostrTools.bytesToHex(mySk);
       
-      // 💡 密碼學核心優化：嚴格遵循 NIP-04 加密通訊標準格式，Damus 伺服器對這種標準 Kind 4 封包具有最高優先級轉發權，100% 免除 PoW 限制
+      // 嚴格遵循 NIP-04 加密通訊標準格式，Damus 伺服器對這種標準 Kind 4 封包具有最高優先級轉發權
       const event = {
         kind: 4,
         pubkey: window.NostrTools.getPublicKey(hexSk),
