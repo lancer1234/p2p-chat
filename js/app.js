@@ -7,6 +7,9 @@ let p2pPeer = null;
 let currentFriendPk = Storage.getLastChatPk(); 
 let nostr = new NostrManager('wss://nos.lol');
 
+// 引入一個旗標，防止背景異步流程同時發動重連打架
+let isReconnecting = false;
+
 if (!myKeyPair.sk || !myKeyPair.pk) {
     const sk = window.NostrTools.generatePrivateKey();
     const pk = window.NostrTools.getPublicKey(sk);
@@ -40,8 +43,27 @@ document.getElementById('input-msg').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
 
+// 安全銷毀 Peer 的核心函式，解除無限死鎖
+function安全銷毀舊連線() {
+    if (p2pPeer) {
+        try {
+            // 關鍵修正：在摧毀前移除所有監聽器，防止 destroy() 再次觸發 close 導致無限遞迴死鎖
+            p2pPeer.removeAllListeners('close');
+            p2pPeer.removeAllListeners('error');
+            p2pPeer.removeAllListeners('signal');
+            p2pPeer.removeAllListeners('connect');
+            p2pPeer.removeAllListeners('data');
+            
+            p2pPeer.destroy();
+        } catch(e) {
+            console.error("銷毀舊連線異常:", e);
+        }
+        p2pPeer = null;
+    }
+}
+
 function startAsInitiator() {
-    if (p2pPeer) { try { p2pPeer.destroy(); } catch(e){} p2pPeer = null; }
+    安全銷毀舊連線();
 
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
@@ -63,7 +85,7 @@ function startAsInitiator() {
             if (data && data.type === 'init-offer') {
                 currentFriendPk = authorPk;
                 
-                if (p2pPeer) { try { p2pPeer.destroy(); } catch(e){} }
+                安全銷毀舊連線();
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
                 p2pPeer.signal(data.sdp);
 
@@ -93,7 +115,7 @@ function startCameraScan() {
             await html5QrcodeScanner.stop();
             document.getElementById('reader').style.display = 'none';
             
-            if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} p2pPeer = null; }
+            安全銷毀舊連線();
             
             currentFriendPk = decodedFriendPk;
             showChatInterface();
@@ -130,8 +152,8 @@ function listenForMessages(friendPk) {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                console.log("📥 收到對方的重連請求 offer，重新配置通道...");
-                if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} }
+                console.log("📥 收到對方的重連請求 offer...");
+                安全銷毀舊連線();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
                 p2pPeer.on('signal', async (myNewAnswer) => {
@@ -142,7 +164,7 @@ function listenForMessages(friendPk) {
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
             } else if (data.type === 'reconnect-answer') {
-                console.log("📥 收到對方的重連回應 answer，打通直連通道！");
+                console.log("📥 收到對方的重連回應 answer！");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -201,6 +223,7 @@ function updateOnlineStatus(isOnline) {
         dot.style.boxShadow = '0 0 8px #00FFCC';
         text.innerText = 'ONLINE';
         text.style.color = '#00FFCC';
+        isReconnecting = false; // 成功連線，重置重連狀態
     } else {
         dot.style.background = '#52525B';
         dot.style.boxShadow = 'none';
@@ -211,16 +234,17 @@ function updateOnlineStatus(isOnline) {
 
 function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
-    if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} p2pPeer = null; }
+    安全銷毀舊連線();
     if (currentFriendPk) Storage.clearSession(currentFriendPk);
     location.href = location.pathname;
 }
 
 async function triggerNostrReconnect() {
-    if (!currentFriendPk) return;
+    if (!currentFriendPk || isReconnecting) return;
+    isReconnecting = true;
     updateOnlineStatus(false);
 
-    if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} p2pPeer = null; }
+    安全銷毀舊連線();
 
     p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: undefined });
     p2pPeer.on('signal', async (newWebrtcData) => {
@@ -243,6 +267,11 @@ function setupPeerEvents() {
         appendMessage(text, 'friend');
     });
 
-    p2pPeer.on('close', () => triggerNostrReconnect());
-    p2pPeer.on('error', () => triggerNostrReconnect());
+    // 只有當不是主動發起的銷毀時，才觸發自動重連
+    p2pPeer.on('close', () => {
+        if (!isReconnecting) triggerNostrReconnect();
+    });
+    p2pPeer.on('error', () => {
+        if (!isReconnecting) triggerNostrReconnect();
+    });
 }
