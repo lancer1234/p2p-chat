@@ -82,20 +82,25 @@ function startAsInitiator() {
 
     const initSub = () => {
         if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
-        nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
+        nostr.subscribeToFriend(myKeyPair.pk, 'any', async (rawContent, authorPk) => {
             try {
                 if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
                 if (!authorPk) return;
                 
-                // 💡 【終極修正】：初次對接直接將加密內容視為純文字（或因相容性嘗試解密），徹底破除解密失敗的死鎖
-                let decryptedText = encryptedContent;
-                if (encryptedContent.includes('?iv=')) {
-                    try { decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent); } catch(e) { return; }
-                }
+                let data = null;
 
-                if (!decryptedText) return;
-                let data;
-                try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
+                // 💡 【超核心防禦分流】：先嘗試將內容當作純文字直接解析 JSON
+                try {
+                    data = JSON.parse(rawContent);
+                } catch (jsonErr) {
+                    // 如果解析失敗，代表這是一串加密密文，這時才允許送去解密，徹底治癒 Invalid padding
+                    try {
+                        const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, rawContent);
+                        if (decryptedText) data = JSON.parse(decryptedText);
+                    } catch (cryptoErr) {
+                        return; // 真的解不開就默默退出，絕對不報錯、不崩潰
+                    }
+                }
 
                 if (data && data.type === 'init-offer') {
                     clearInterval(initTimer);
@@ -110,7 +115,6 @@ function startAsInitiator() {
 
                     p2pPeer.on('signal', async (webrtcAnswer) => {
                         const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
-                        // 初次響應同樣不走複雜加密，直接投遞純文字 JSON，確保雙方 100% 同步跳轉
                         await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
                     });
 
@@ -165,7 +169,6 @@ function startCameraScan() {
             
             p2pPeer.on('signal', async (webrtcOffer) => {
                 const offerPackage = { type: 'init-offer', sdp: webrtcOffer };
-                // 💡 【終極修正】：初次發射直接投遞純文字信號 JSON，杜絕對端因尚未建立 Shared Secret 而解密失敗
                 await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
             });
 
@@ -180,19 +183,24 @@ function startCameraScan() {
 
 function listenForMessages(friendPk) {
     if (!friendPk) return;
-    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (encryptedContent, authorPk) => {
+    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
         try {
             const senderPk = authorPk || friendPk;
+            let data = null;
             
-            // 💡 容錯分支：如果收到的是初次握手的純文字 JSON 訊號，直接解析；如果是後續斷線重連，才執行 NIP-04 解密
-            let decryptedText = encryptedContent;
-            if (encryptedContent.includes('?iv=')) {
-                decryptedText = await Crypto.decryptData(myKeyPair.sk, senderPk, encryptedContent);
+            // 💡 【超核心防禦分流】：通用全域聽筒防崩潰
+            try {
+                data = JSON.parse(rawContent);
+            } catch (jsonErr) {
+                try {
+                    const decryptedText = await Crypto.decryptData(myKeyPair.sk, senderPk, rawContent);
+                    if (decryptedText) data = JSON.parse(decryptedText);
+                } catch (cryptoErr) {
+                    return;
+                }
             }
             
-            if (!decryptedText) return;
-            let data;
-            try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
+            if (!data) return;
 
             if (data.type === 'leave') {
                 appendMessage("❌ 對方已中斷連線並離開了聊天室。", "system");
@@ -206,7 +214,6 @@ function listenForMessages(friendPk) {
             if (data.type === 'init-answer') {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
-            // 💡 二次重連時因為雙方早已有 Shared Secret，走標準安全加密通道
             else if (data.type === 'reconnect-offer') {
                 強制銷毀舊連線實體();
                 
