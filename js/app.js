@@ -4,20 +4,16 @@ import { NostrManager } from './nostr.js';
 
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
-let currentFriendPk = Storage.getLastChatPk(); 
-let nostr = new NostrManager('wss://nos.lol');
+let currentFriendPk = localStorage.getItem('last_chat_pk'); // 物理隔離，直接改用最純粹的原生 LocalStorage 讀取
+let nostr = new NostrManager('wss://relay.damus.io'); // 【核心修正】：切換成對 P2P 握手最友善、無 PoW 挖礦限制的 Damus 高速節點
 
-// 🔐 移動端與私密轉送專用狀態鎖
 let isNostrReady = false;
 let isReconnecting = false;
 
-// 🌐 穿透 iCloud 私密轉送與複雜 NAT 防火牆的公共 STUN 伺服器
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' }
     ]
 };
 
@@ -28,12 +24,10 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
-// 網頁啟動：優先初始化 Nostr，再啟動流程
 nostr.connect().then(() => {
     console.log("🌐 Nostr 網路骨幹已成功通電");
     isNostrReady = true;
 
-    // 監聽所有已知好友（包含重連與離開提示）
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
@@ -44,7 +38,6 @@ nostr.connect().then(() => {
         restoreChatLogs();
         updateOnlineStatus(false);
         
-        // 給手機版瀏覽器緩衝，等待 Nostr 監聽完全就位
         setTimeout(() => {
             triggerNostrReconnect();
         }, 2000);
@@ -80,7 +73,6 @@ function startAsInitiator() {
     qr.make();
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
-    // 💡 關鍵修正：建立 QR Code 時，立刻把 A 的全域聽筒打開，防止漏接 B 掃碼後的任何訊號
     nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
         try {
             if (!authorPk) return;
@@ -90,11 +82,9 @@ function startAsInitiator() {
             let data;
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
-            // 處理初次掃碼直連
             if (data && data.type === 'init-offer') {
                 currentFriendPk = authorPk;
-                // 安全儲存金鑰（相容原本的 localStorage 邏輯，避免噴錯）
-                localStorage.setItem('last_chat_pk', currentFriendPk);
+                localStorage.setItem('last_chat_pk', currentFriendPk); // 核心修正：100% 採用原生寫法，拒絕呼叫外部物件
                 
                 強制銷毀舊連線實體();
                 
@@ -111,11 +101,9 @@ function startAsInitiator() {
                 Storage.saveFriend(currentFriendPk, sharedSecret);
                 setupPeerEvents();
                 
-                // 接通後切換聊天介面
                 showChatInterface();
                 restoreChatLogs();
             } 
-            // 處理因為時間差導致的被動重連請求
             else if (data && data.type === 'reconnect-offer') {
                 currentFriendPk = authorPk;
                 localStorage.setItem('last_chat_pk', currentFriendPk);
@@ -150,16 +138,13 @@ function startCameraScan() {
         async (decodedFriendPk) => {
             try {
                 await html5QrcodeScanner.stop();
-            } catch (err) {
-                console.log("停止相機時忽略的異常");
-            }
+            } catch (err) {}
             document.getElementById('reader').style.display = 'none';
             
             強制銷毀舊連線實體();
             
-            // 💡 修正：使用相容的標準儲存，避免調用不存在的 method 導致黑畫面
             currentFriendPk = decodedFriendPk;
-            localStorage.setItem('last_chat_pk', currentFriendPk);
+            localStorage.setItem('last_chat_pk', currentFriendPk); // 核心修正：100% 採用原生寫法，防阻崩潰
             
             showChatInterface();
             appendMessage("已成功掃描信任密鑰，正在背景交換加密信道協議...", "system");
@@ -193,7 +178,6 @@ function listenForMessages(friendPk) {
             let data;
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
-            // 接收對方的離開提示
             if (data.type === 'leave') {
                 appendMessage("❌ 對方已中斷連線並離開了聊天室。", "system");
                 updateOnlineStatus(false);
@@ -205,7 +189,6 @@ function listenForMessages(friendPk) {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                console.log("📥 收到重連請求 offer...");
                 強制銷毀舊連線實體();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
@@ -217,7 +200,6 @@ function listenForMessages(friendPk) {
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
             } else if (data.type === 'reconnect-answer') {
-                console.log("📥 收到重連回應 answer！");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -260,7 +242,6 @@ function restoreChatLogs() {
     }
 }
 
-// 修正：確保切換介面時強制蓋掉所有 QRCode 和相機殘留
 function showChatInterface() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('qrcode-container').style.display = 'none';
@@ -297,9 +278,7 @@ async function leaveChat() {
             const leavePackage = { type: 'leave' };
             const encLeave = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(leavePackage));
             await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encLeave);
-        } catch (e) {
-            console.log("發送離開通知失敗");
-        }
+        } catch (e) {}
     }
 
     強制銷毀舊連線實體();
@@ -307,7 +286,6 @@ async function leaveChat() {
     location.href = location.pathname;
 }
 
-// 主動重連發射行程
 async function triggerNostrReconnect() {
     if (!currentFriendPk || !isNostrReady || isReconnecting) return;
     
@@ -343,7 +321,6 @@ async function triggerNostrReconnect() {
     p2pPeer.on('error', () => { isReconnecting = false; updateOnlineStatus(false); });
 }
 
-// 💡 守護常駐心跳偵測：每 4 秒安全檢查一次
 setInterval(() => {
     if (currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
         console.log("🔍 心跳排查：直連中斷，雙向主動握手發動中...");
