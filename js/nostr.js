@@ -1,5 +1,5 @@
 export class NostrManager {
-  constructor(relayUrl = 'wss://nos.lol') {
+  constructor(relayUrl = 'wss://relay.damus.io') { // 預設改用極速、自由、無 PoW 的公共 Damus 節點
     this.relayUrl = relayUrl;
     this.relay = null;
   }
@@ -47,7 +47,6 @@ export class NostrManager {
         '#p': [myPk]
       };
       
-      // 優化點：如果指定特定好友就篩選，若是 'any' 則允許接收任何新人的初次握手 offer
       if (friendPk !== 'any') {
         filter.authors = [friendPk];
       }
@@ -55,7 +54,6 @@ export class NostrManager {
       const sub = this.relay.sub([filter]);
 
       sub.on('event', (event) => {
-        // 回傳加密內容，並把發送者的公鑰（event.pubkey）一併帶回，以便辨識是誰拋來的 Offer
         onMessageReceived(event.content, event.pubkey);
       });
 
