@@ -49,13 +49,17 @@ function startAsInitiator() {
     nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
         try {
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
-            
-            // 修正點：防呆過濾。先檢查這串純文字是不是合法的 JSON 格式，避免非握手訊息引發 Unexpected EOF 崩潰
-            if (!decryptedText.trim().startsWith('{')) return;
-            
-            const data = JSON.parse(decryptedText);
+            if (!decryptedText) return;
 
-            if (data.type === 'init-offer') {
+            // 修正點：棄用嚴格字串開頭判定，改用 try...catch 容錯解析，相容各平台解密後可能附帶的隱形字元
+            let data;
+            try {
+                data = JSON.parse(decryptedText);
+            } catch(jsonErr) {
+                return; // 如果真的不是 JSON (例如純文字聊天的殘留歷史訊號)，默默退出，不噴錯誤
+            }
+
+            if (data && data.type === 'init-offer') {
                 currentFriendPk = authorPk;
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
@@ -71,7 +75,7 @@ function startAsInitiator() {
                 Storage.saveFriend(currentFriendPk, sharedSecret);
                 setupPeerEvents();
             }
-        } catch (e) { console.error("初始化握手異常截獲:", e); }
+        } catch (e) { console.error("背景連線初始化異常:", e); }
     });
 }
 
@@ -87,7 +91,6 @@ function startCameraScan() {
             await html5QrcodeScanner.stop();
             document.getElementById('reader').style.display = 'none';
             
-            // 修正點：防呆。避免重複掃描同一個好友公鑰時，連線打架
             if (p2pPeer && !p2pPeer.destroyed) {
                 try { p2pPeer.destroy(); } catch(e) {}
             }
@@ -118,20 +121,22 @@ function listenForMessages(friendPk) {
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (encryptedContent) => {
         try {
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, friendPk, encryptedContent);
+            if (!decryptedText) return;
             
-            // 修正點：過濾非 JSON 資料，防堵 EOF 錯誤
-            if (!decryptedText.trim().startsWith('{')) return;
-            
-            const data = JSON.parse(decryptedText);
+            // 修正點：容錯解析
+            let data;
+            try {
+                data = JSON.parse(decryptedText);
+            } catch(jsonErr) {
+                return;
+            }
 
-            // 修正點：在呼叫 p2pPeer.signal 之前，必須確保 Peer 活著且尚未被銷毀，治癒 "cannot signal after peer is destroyed"
             if (!p2pPeer || p2pPeer.destroyed) return;
 
             if (data.type === 'init-answer') {
                 p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                // 如果是收到重連訊號，則在銷毀舊實體後建立新的接收端
                 try { p2pPeer.destroy(); } catch(e) {}
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
