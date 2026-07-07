@@ -14,21 +14,17 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
-// 網頁啟動生命週期管理
 nostr.connect().then(() => {
-    // 1. 無論如何，第一步優先：先把所有已知好友的監聽信道牢牢架設好（不漏接任何訊號）
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
     });
 
-    // 2. 當監聽管線完全接通後，才判斷是否需要執行重新整理重連
     if (currentFriendPk) {
         showChatInterface();
         restoreChatLogs();
         updateOnlineStatus(false);
         
-        // 【手機端優化核心】：延遲 1500 毫秒發射重連訊號，確保對方的手機也已經載入網頁並訂閱成功，完美防止訊號擦身而過
         setTimeout(() => {
             console.log("⚡ 啟動手機端背景安全自動重連...");
             triggerNostrReconnect();
@@ -45,7 +41,6 @@ document.getElementById('input-msg').addEventListener('keypress', (e) => {
 });
 
 function startAsInitiator() {
-    // 發起新連線前，強制物理清空任何可能殘留的手機背景 Peer 執行個體
     if (p2pPeer) { try { p2pPeer.destroy(); } catch(e){} p2pPeer = null; }
 
     document.getElementById('setup-container').style.display = 'none';
