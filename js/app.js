@@ -7,7 +7,7 @@ let p2pPeer = null;
 let currentFriendPk = localStorage.getItem('last_chat_pk'); 
 let nostr = new NostrManager(); 
 
-// 🔐 移動端專用核心鎖
+// 🔐 移動端與私密轉送專用核心狀態鎖
 let isNostrReady = false;
 let isReconnecting = false;
 let isInChatMode = false; 
@@ -33,12 +33,13 @@ nostr.connect().then(() => {
     console.log("🌐 Nostr 網路骨幹已成功通電");
     isNostrReady = true;
 
+    // 監聽所有已知好友
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
     });
 
-    // 只有當本地有歷史紀錄，且不是正要重新配對時，才自動回復聊天
+    // 如果本地有歷史紀錄，且使用者不是主動退回首頁時，才自動回復聊天
     if (currentFriendPk) {
         isInChatMode = true; 
         showChatInterface();
@@ -51,7 +52,6 @@ nostr.connect().then(() => {
     }
 });
 
-// 監聽按鈕點擊
 document.getElementById('btn-create').addEventListener('click', startAsInitiator);
 document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 document.getElementById('btn-send').addEventListener('click', sendMessage);
@@ -71,7 +71,7 @@ function 強制銷毀舊連線實體() {
 }
 
 function startAsInitiator() {
-    // 🌟 【超核心修正】：既然點了產生全新 QR Code，立刻強制清空上一次的快取紀錄與記憶狀態！
+    // 明確洗掉配對狀態與舊快取
     localStorage.removeItem('last_chat_pk');
     currentFriendPk = null;
     isInChatMode = false; 
@@ -87,47 +87,60 @@ function startAsInitiator() {
     qr.make();
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
-    // 開啟全域聽筒，等待初次對接
-    nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
-        try {
-            if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
-
-            if (!authorPk) return;
-            const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
-            if (!decryptedText) return;
-
-            let data;
-            try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
-
-            if (data && data.type === 'init-offer') {
-                currentFriendPk = authorPk;
-                localStorage.setItem('last_chat_pk', currentFriendPk);
+    // 🌟 核心防漏優化：發起方建立 QR Code 後，每 3 秒強行刷新一次廣播監聽，確保 100% 抓到 B 的 init-offer
+    const initSub = () => {
+        if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
+        nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
+            try {
+                if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
+                if (!authorPk) return;
                 
-                強制銷毀舊連線實體();
-                
-                p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
-                setupPeerEvents(); 
-                p2pPeer.signal(data.sdp);
+                const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
+                if (!decryptedText) return;
 
-                p2pPeer.on('signal', async (webrtcAnswer) => {
-                    const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
-                    const encAnswer = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
-                    await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encAnswer);
-                });
+                let data;
+                try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
-                const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
-                Storage.saveFriend(currentFriendPk, sharedSecret);
-                
-                isInChatMode = true;
-                showChatInterface();
-                restoreChatLogs();
-            }
-        } catch (e) { console.error("背景連線初始化異常:", e); }
-    });
+                if (data && data.type === 'init-offer') {
+                    clearInterval(initTimer); // 成功捕獲，銷毀定時器
+                    currentFriendPk = authorPk;
+                    localStorage.setItem('last_chat_pk', currentFriendPk);
+                    
+                    強制銷毀舊連線實體();
+                    
+                    p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
+                    setupPeerEvents(); 
+                    p2pPeer.signal(data.sdp);
+
+                    p2pPeer.on('signal', async (webrtcAnswer) => {
+                        const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
+                        const encAnswer = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
+                        await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encAnswer);
+                    });
+
+                    const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
+                    Storage.saveFriend(currentFriendPk, sharedSecret);
+                    
+                    isInChatMode = true;
+                    showChatInterface();
+                    restoreChatLogs();
+                }
+            } catch (e) {}
+        });
+    };
+
+    initSub();
+    const initTimer = setInterval(() => {
+        if (!isInChatMode && (!p2pPeer || !p2pPeer.connected)) {
+            console.log("🔄 背景配對聽筒全自動對焦刷新...");
+            initSub();
+        } else {
+            clearInterval(initTimer);
+        }
+    }, 3000);
 }
 
 function startCameraScan() {
-    // 🌟 【超核心修正】：既然要掃描別人，也立刻洗掉舊有的配對，防範跳轉打架
     localStorage.removeItem('last_chat_pk');
     currentFriendPk = null;
     isInChatMode = false;
