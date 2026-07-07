@@ -22,7 +22,6 @@ nostr.connect().then(() => {
         triggerNostrReconnect();
     }
     
-    // 如果存在已知好友，持續訂閱他們的信道
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
@@ -37,23 +36,23 @@ document.getElementById('input-msg').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
 
-// === 【優化亮點一】發起方：QR Code 只放公鑰，格子變極稀疏，秒速出碼、秒速辨識 ===
 function startAsInitiator() {
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
     container.style.display = 'block';
     
-    // QR Code 內僅含純文字公鑰，體積縮小 10 倍以上！
     const qr = window.qrcode(0, 'M');
     qr.addData(myKeyPair.pk);
     qr.make();
-    container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(8); // 放大點陣，極易對焦
+    container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
-    // 啟動專屬的初始化訂閱，等待掃碼方從背景拋來 WebRTC Offer
     nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
         try {
-            // 解析背景握手訊號
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
+            
+            // 修正點：防呆過濾。先檢查這串純文字是不是合法的 JSON 格式，避免非握手訊息引發 Unexpected EOF 崩潰
+            if (!decryptedText.trim().startsWith('{')) return;
+            
             const data = JSON.parse(decryptedText);
 
             if (data.type === 'init-offer') {
@@ -72,11 +71,10 @@ function startAsInitiator() {
                 Storage.saveFriend(currentFriendPk, sharedSecret);
                 setupPeerEvents();
             }
-        } catch (e) { console.error("初始化握手失敗:", e); }
+        } catch (e) { console.error("初始化握手異常截獲:", e); }
     });
 }
 
-// === 【優化亮點二】掃碼方：秒掃完畢後，相機關閉，所有 WebRTC 協商全在背景安靜執行 ===
 function startCameraScan() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
@@ -84,17 +82,20 @@ function startCameraScan() {
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
     html5QrcodeScanner.start(
         { facingMode: "environment" },
-        { fps: 20, qrbox: 260 }, // 提高 FPS 偵測
+        { fps: 20, qrbox: 250 }, 
         async (decodedFriendPk) => {
-            // 只要一抓到對方的公鑰字串，立刻關閉相機，給使用者最好的體感
             await html5QrcodeScanner.stop();
             document.getElementById('reader').style.display = 'none';
+            
+            // 修正點：防呆。避免重複掃描同一個好友公鑰時，連線打架
+            if (p2pPeer && !p2pPeer.destroyed) {
+                try { p2pPeer.destroy(); } catch(e) {}
+            }
             
             currentFriendPk = decodedFriendPk;
             showChatInterface();
             appendMessage("已成功掃描信任密鑰，正在背景交換加密信道協議...", "system");
 
-            // 本地直接建立 WebRTC 協商封包，並在背景透過 Nostr 發射給發起方
             p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: undefined });
             
             p2pPeer.on('signal', async (webrtcOffer) => {
@@ -107,26 +108,32 @@ function startCameraScan() {
             Storage.saveFriend(currentFriendPk, sharedSecret);
             setupPeerEvents();
 
-            // 在背景監聽對方的 Answer 回應
             listenForMessages(currentFriendPk);
         },
         () => {}
     ).catch(() => location.reload());
 }
 
-// 通用的後台通訊與斷線重連訂閱監聽
 function listenForMessages(friendPk) {
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (encryptedContent) => {
         try {
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, friendPk, encryptedContent);
+            
+            // 修正點：過濾非 JSON 資料，防堵 EOF 錯誤
+            if (!decryptedText.trim().startsWith('{')) return;
+            
             const data = JSON.parse(decryptedText);
 
-            // 處理初次掃碼的背景 Answer
+            // 修正點：在呼叫 p2pPeer.signal 之前，必須確保 Peer 活著且尚未被銷毀，治癒 "cannot signal after peer is destroyed"
+            if (!p2pPeer || p2pPeer.destroyed) return;
+
             if (data.type === 'init-answer') {
-                if (p2pPeer) p2pPeer.signal(data.sdp);
+                p2pPeer.signal(data.sdp);
             } 
-            // 處理重新整理/斷線後的二次握手重連
             else if (data.type === 'reconnect-offer') {
+                // 如果是收到重連訊號，則在銷毀舊實體後建立新的接收端
+                try { p2pPeer.destroy(); } catch(e) {}
+                
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
                 p2pPeer.on('signal', async (myNewAnswer) => {
                     const reconnectAnswer = { type: 'reconnect-answer', sdp: myNewAnswer };
@@ -136,7 +143,7 @@ function listenForMessages(friendPk) {
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
             } else if (data.type === 'reconnect-answer') {
-                if (p2pPeer) p2pPeer.signal(data.sdp);
+                p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
     });
@@ -197,7 +204,7 @@ function updateOnlineStatus(isOnline) {
     } else {
         dot.style.background = '#52525B';
         dot.style.boxShadow = 'none';
-        text.innerText = 'OFFLINE (CONNECTING)';
+        text.innerText = 'OFFLINE (RECONNECTING)';
         text.style.color = '#52525B';
     }
 }
