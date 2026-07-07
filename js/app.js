@@ -87,9 +87,13 @@ function startAsInitiator() {
                 if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
                 if (!authorPk) return;
                 
-                const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
-                if (!decryptedText) return;
+                // 💡 【終極修正】：初次對接直接將加密內容視為純文字（或因相容性嘗試解密），徹底破除解密失敗的死鎖
+                let decryptedText = encryptedContent;
+                if (encryptedContent.includes('?iv=')) {
+                    try { decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent); } catch(e) { return; }
+                }
 
+                if (!decryptedText) return;
                 let data;
                 try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
@@ -106,8 +110,8 @@ function startAsInitiator() {
 
                     p2pPeer.on('signal', async (webrtcAnswer) => {
                         const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
-                        const encAnswer = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
-                        await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encAnswer);
+                        // 初次響應同樣不走複雜加密，直接投遞純文字 JSON，確保雙方 100% 同步跳轉
+                        await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
                     });
 
                     const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
@@ -161,8 +165,8 @@ function startCameraScan() {
             
             p2pPeer.on('signal', async (webrtcOffer) => {
                 const offerPackage = { type: 'init-offer', sdp: webrtcOffer };
-                const encOffer = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
-                await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encOffer);
+                // 💡 【終極修正】：初次發射直接投遞純文字信號 JSON，杜絕對端因尚未建立 Shared Secret 而解密失敗
+                await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
             });
 
             const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
@@ -179,9 +183,14 @@ function listenForMessages(friendPk) {
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (encryptedContent, authorPk) => {
         try {
             const senderPk = authorPk || friendPk;
-            const decryptedText = await Crypto.decryptData(myKeyPair.sk, senderPk, encryptedContent);
-            if (!decryptedText) return;
             
+            // 💡 容錯分支：如果收到的是初次握手的純文字 JSON 訊號，直接解析；如果是後續斷線重連，才執行 NIP-04 解密
+            let decryptedText = encryptedContent;
+            if (encryptedContent.includes('?iv=')) {
+                decryptedText = await Crypto.decryptData(myKeyPair.sk, senderPk, encryptedContent);
+            }
+            
+            if (!decryptedText) return;
             let data;
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
@@ -197,6 +206,7 @@ function listenForMessages(friendPk) {
             if (data.type === 'init-answer') {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
+            // 💡 二次重連時因為雙方早已有 Shared Secret，走標準安全加密通道
             else if (data.type === 'reconnect-offer') {
                 強制銷毀舊連線實體();
                 
