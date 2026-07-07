@@ -11,7 +11,7 @@ let nostr = new NostrManager('wss://nos.lol');
 let isNostrReady = false;
 let isReconnecting = false;
 
-// 穿透 iCloud 私密轉送與複雜 NAT 防火牆的 STUN 伺服器核心設定
+// 公共 STUN 伺服器
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -28,11 +28,12 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
-// 優先初始化 Nostr，再啟動重連流程
+// 網頁啟動：優先初始化 Nostr，再啟動流程
 nostr.connect().then(() => {
     console.log("🌐 Nostr 網路骨幹已成功通電");
     isNostrReady = true;
 
+    // 監聽所有已知好友（包含重連與離開提示）
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
@@ -43,7 +44,7 @@ nostr.connect().then(() => {
         restoreChatLogs();
         updateOnlineStatus(false);
         
-        // 給手機版瀏覽器 2 秒緩衝，等待 Nostr 聽筒完全就位
+        // 給手機版瀏覽器緩衝，等待 Nostr 監聽完全就位
         setTimeout(() => {
             triggerNostrReconnect();
         }, 2000);
@@ -79,6 +80,7 @@ function startAsInitiator() {
     qr.make();
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
+    // 創建人也立刻將 currentFriendPk 設為 any 監聽狀態，並允許心跳介入
     nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
         try {
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
@@ -88,10 +90,12 @@ function startAsInitiator() {
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
             if (data && data.type === 'init-offer') {
+                // 鎖定當前對話朋友
                 currentFriendPk = authorPk;
+                Storage.saveLastChatPk(currentFriendPk);
+                
                 強制銷毀舊連線實體();
                 
-                // 接收端初始化，引入 STUN 伺服器
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
                 p2pPeer.signal(data.sdp);
 
@@ -104,6 +108,7 @@ function startAsInitiator() {
                 const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
                 Storage.saveFriend(currentFriendPk, sharedSecret);
                 setupPeerEvents();
+                listenForMessages(currentFriendPk);
             }
         } catch (e) { console.error("背景連線初始化異常:", e); }
     });
@@ -123,10 +128,11 @@ function startCameraScan() {
             
             強制銷毀舊連線實體();
             currentFriendPk = decodedFriendPk;
+            Storage.saveLastChatPk(currentFriendPk);
+            
             showChatInterface();
             appendMessage("已成功掃描信任密鑰，正在背景交換加密信道協議...", "system");
 
-            // 發起端初始化，引入 STUN 伺服器
             p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
             
             p2pPeer.on('signal', async (webrtcOffer) => {
@@ -146,32 +152,40 @@ function startCameraScan() {
 }
 
 function listenForMessages(friendPk) {
-    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (encryptedContent) => {
+    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (encryptedContent, authorPk) => {
         try {
-            const decryptedText = await Crypto.decryptData(myKeyPair.sk, friendPk, encryptedContent);
+            // 安全檢查：確保只處理來自目前交友或合法對端的信號
+            const senderPk = authorPk || friendPk;
+            const decryptedText = await Crypto.decryptData(myKeyPair.sk, senderPk, encryptedContent);
             if (!decryptedText) return;
             
             let data;
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
+            if (data.type === 'leave') {
+                appendMessage("對方已中斷連線並離開了聊天室。", "system");
+                updateOnlineStatus(false);
+                強制銷毀舊連線實體();
+                return;
+            }
+
             if (data.type === 'init-answer') {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                console.log("📥 收到對方的重連請求 offer，建立穿透防禦端...");
+                console.log("收到重連請求 offer...");
                 強制銷毀舊連線實體();
                 
-                // 被動重連端，引入 STUN 伺服器
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
                 p2pPeer.on('signal', async (myNewAnswer) => {
                     const reconnectAnswer = { type: 'reconnect-answer', sdp: myNewAnswer };
-                    const encAnswer = await Crypto.encryptData(myKeyPair.sk, friendPk, JSON.stringify(reconnectAnswer));
-                    await nostr.sendEvent(myKeyPair.sk, friendPk, encAnswer);
+                    const encAnswer = await Crypto.encryptData(myKeyPair.sk, senderPk, JSON.stringify(reconnectAnswer));
+                    await nostr.sendEvent(myKeyPair.sk, senderPk, encAnswer);
                 });
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
             } else if (data.type === 'reconnect-answer') {
-                console.log("📥 收到對方的重連回應 answer，穿透直連打通！");
+                console.log("收到重連回應 answer！");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -230,7 +244,7 @@ function updateOnlineStatus(isOnline) {
         dot.style.boxShadow = '0 0 8px #00FFCC';
         text.innerText = 'ONLINE';
         text.style.color = '#00FFCC';
-        isReconnecting = false; // 直連打通，解鎖
+        isReconnecting = false; 
     } else {
         dot.style.background = '#52525B';
         dot.style.boxShadow = 'none';
@@ -239,14 +253,26 @@ function updateOnlineStatus(isOnline) {
     }
 }
 
-function leaveChat() {
+async function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
+    
+    if (currentFriendPk && isNostrReady) {
+        try {
+            // 廣播離開訊號給對方
+            const leavePackage = { type: 'leave' };
+            const encLeave = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(leavePackage));
+            await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encLeave);
+        } catch (e) {
+            console.log("發送離開通知失敗");
+        }
+    }
+
     強制銷毀舊連線實體();
     if (currentFriendPk) Storage.clearSession(currentFriendPk);
     location.href = location.pathname;
 }
 
-// 主動重連協商發射器
+// 主動重連發射行程
 async function triggerNostrReconnect() {
     if (!currentFriendPk || !isNostrReady || isReconnecting) return;
     
@@ -261,7 +287,6 @@ async function triggerNostrReconnect() {
 
     isReconnecting = true; 
 
-    // 主動重連端，引入 STUN 伺服器
     p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
     
     p2pPeer.on('signal', async (newWebrtcData) => {
@@ -283,10 +308,9 @@ async function triggerNostrReconnect() {
     p2pPeer.on('error', () => { isReconnecting = false; updateOnlineStatus(false); });
 }
 
-// 每 4 秒安全檢查一次
 setInterval(() => {
     if (currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
-        console.log("🔍 心跳排查：直連中斷，啟動 STUN 穿透協議...");
+        console.log("心跳排查：直連中斷，雙向主動握手發動中...");
         triggerNostrReconnect();
     }
 }, 4000);
