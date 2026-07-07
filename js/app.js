@@ -14,18 +14,26 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
+// 網頁啟動生命週期管理
 nostr.connect().then(() => {
-    if (currentFriendPk) {
-        showChatInterface();
-        restoreChatLogs();
-        updateOnlineStatus(false);
-        triggerNostrReconnect();
-    }
-    
+    // 1. 無論如何，第一步優先：先把所有已知好友的監聽信道牢牢架設好（不漏接任何訊號）
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
     });
+
+    // 2. 當監聽管線完全接通後，才判斷是否需要執行重新整理重連
+    if (currentFriendPk) {
+        showChatInterface();
+        restoreChatLogs();
+        updateOnlineStatus(false);
+        
+        // 【手機端優化核心】：延遲 1500 毫秒發射重連訊號，確保對方的手機也已經載入網頁並訂閱成功，完美防止訊號擦身而過
+        setTimeout(() => {
+            console.log("⚡ 啟動手機端背景安全自動重連...");
+            triggerNostrReconnect();
+        }, 1500);
+    }
 });
 
 document.getElementById('btn-create').addEventListener('click', startAsInitiator);
@@ -37,6 +45,9 @@ document.getElementById('input-msg').addEventListener('keypress', (e) => {
 });
 
 function startAsInitiator() {
+    // 發起新連線前，強制物理清空任何可能殘留的手機背景 Peer 執行個體
+    if (p2pPeer) { try { p2pPeer.destroy(); } catch(e){} p2pPeer = null; }
+
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
     container.style.display = 'block';
@@ -51,17 +62,13 @@ function startAsInitiator() {
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
             if (!decryptedText) return;
 
-            // 修正點：棄用嚴格字串開頭判定，改用 try...catch 容錯解析，相容各平台解密後可能附帶的隱形字元
             let data;
-            try {
-                data = JSON.parse(decryptedText);
-            } catch(jsonErr) {
-                return; // 如果真的不是 JSON (例如純文字聊天的殘留歷史訊號)，默默退出，不噴錯誤
-            }
+            try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
             if (data && data.type === 'init-offer') {
                 currentFriendPk = authorPk;
                 
+                if (p2pPeer) { try { p2pPeer.destroy(); } catch(e){} }
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
                 p2pPeer.signal(data.sdp);
 
@@ -91,9 +98,7 @@ function startCameraScan() {
             await html5QrcodeScanner.stop();
             document.getElementById('reader').style.display = 'none';
             
-            if (p2pPeer && !p2pPeer.destroyed) {
-                try { p2pPeer.destroy(); } catch(e) {}
-            }
+            if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} p2pPeer = null; }
             
             currentFriendPk = decodedFriendPk;
             showChatInterface();
@@ -123,21 +128,15 @@ function listenForMessages(friendPk) {
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, friendPk, encryptedContent);
             if (!decryptedText) return;
             
-            // 修正點：容錯解析
             let data;
-            try {
-                data = JSON.parse(decryptedText);
-            } catch(jsonErr) {
-                return;
-            }
-
-            if (!p2pPeer || p2pPeer.destroyed) return;
+            try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
             if (data.type === 'init-answer') {
-                p2pPeer.signal(data.sdp);
+                if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                try { p2pPeer.destroy(); } catch(e) {}
+                console.log("📥 收到對方的重連請求 offer，重新配置通道...");
+                if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} }
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
                 p2pPeer.on('signal', async (myNewAnswer) => {
@@ -148,7 +147,8 @@ function listenForMessages(friendPk) {
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
             } else if (data.type === 'reconnect-answer') {
-                p2pPeer.signal(data.sdp);
+                console.log("📥 收到對方的重連回應 answer，打通直連通道！");
+                if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
     });
@@ -216,7 +216,7 @@ function updateOnlineStatus(isOnline) {
 
 function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
-    if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} }
+    if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} p2pPeer = null; }
     if (currentFriendPk) Storage.clearSession(currentFriendPk);
     location.href = location.pathname;
 }
@@ -225,19 +225,15 @@ async function triggerNostrReconnect() {
     if (!currentFriendPk) return;
     updateOnlineStatus(false);
 
-    const friends = Storage.getFriends();
-    const friendData = friends[currentFriendPk];
-    if (!friendData) return;
+    if (p2pPeer) { try { p2pPeer.destroy(); } catch(e) {} p2pPeer = null; }
 
-    if (!p2pPeer || p2pPeer.destroyed) {
-        p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: undefined });
-        p2pPeer.on('signal', async (newWebrtcData) => {
-            const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
-            const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
-            await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
-        });
-        setupPeerEvents();
-    }
+    p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: undefined });
+    p2pPeer.on('signal', async (newWebrtcData) => {
+        const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
+        const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
+        await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
+    });
+    setupPeerEvents();
 }
 
 function setupPeerEvents() {
