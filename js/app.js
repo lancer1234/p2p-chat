@@ -7,8 +7,8 @@ let p2pPeer = null;
 let currentFriendPk = Storage.getLastChatPk(); 
 let nostr = new NostrManager('wss://nos.lol');
 
-// 引入一個旗標，防止背景異步流程同時發動重連打架
-let isReconnecting = false;
+// 用來完全切斷異步打架的狀態鎖
+let isPeerConnecting = false;
 
 if (!myKeyPair.sk || !myKeyPair.pk) {
     const sk = window.NostrTools.generatePrivateKey();
@@ -28,8 +28,9 @@ nostr.connect().then(() => {
         restoreChatLogs();
         updateOnlineStatus(false);
         
+        // 重新整理時，延遲發動背景重連
         setTimeout(() => {
-            console.log("⚡ 啟動手機端背景安全自動重連...");
+            console.log("⚡ 啟動安全背景重連機制...");
             triggerNostrReconnect();
         }, 1500);
     }
@@ -43,27 +44,26 @@ document.getElementById('input-msg').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
 
-// 安全銷毀 Peer 的核心函式，解除無限死鎖
-function安全銷毀舊連線() {
+// 核心修正：將 Peer 的銷毀完全物理隔離，不帶任何髒包
+function 強制銷毀舊連線實體() {
     if (p2pPeer) {
         try {
-            // 關鍵修正：在摧毀前移除所有監聽器，防止 destroy() 再次觸發 close 導致無限遞迴死鎖
-            p2pPeer.removeAllListeners('close');
-            p2pPeer.removeAllListeners('error');
-            p2pPeer.removeAllListeners('signal');
-            p2pPeer.removeAllListeners('connect');
-            p2pPeer.removeAllListeners('data');
-            
-            p2pPeer.destroy();
+            // 拔掉所有外掛事件
+            p2pPeer.removeAllListeners();
+            // 如果它本來就已經連上了，主動通知關閉
+            if (p2pPeer.connected) {
+                p2pPeer.destroy();
+            }
         } catch(e) {
-            console.error("銷毀舊連線異常:", e);
+            console.log("忽略 Peer 記憶體釋放異常");
         }
         p2pPeer = null;
     }
+    isPeerConnecting = false;
 }
 
 function startAsInitiator() {
-    安全銷毀舊連線();
+    強制銷毀舊連線實體();
 
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
@@ -85,7 +85,7 @@ function startAsInitiator() {
             if (data && data.type === 'init-offer') {
                 currentFriendPk = authorPk;
                 
-                安全銷毀舊連線();
+                強制銷毀舊連線實體();
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
                 p2pPeer.signal(data.sdp);
 
@@ -115,7 +115,7 @@ function startCameraScan() {
             await html5QrcodeScanner.stop();
             document.getElementById('reader').style.display = 'none';
             
-            安全銷毀舊連線();
+            強制銷毀舊連線實體();
             
             currentFriendPk = decodedFriendPk;
             showChatInterface();
@@ -148,12 +148,14 @@ function listenForMessages(friendPk) {
             let data;
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
+            // 處理初次綁定
             if (data.type === 'init-answer') {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
+            // 處理被動接收重連
             else if (data.type === 'reconnect-offer') {
-                console.log("📥 收到對方的重連請求 offer...");
-                安全銷毀舊連線();
+                console.log("📥 收到對方的重連請求 offer，建立全新響應端...");
+                強制銷毀舊連線實體();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: undefined });
                 p2pPeer.on('signal', async (myNewAnswer) => {
@@ -164,7 +166,7 @@ function listenForMessages(friendPk) {
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
             } else if (data.type === 'reconnect-answer') {
-                console.log("📥 收到對方的重連回應 answer！");
+                console.log("📥 收到對方的重連回應 answer，正式打通！");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -223,7 +225,7 @@ function updateOnlineStatus(isOnline) {
         dot.style.boxShadow = '0 0 8px #00FFCC';
         text.innerText = 'ONLINE';
         text.style.color = '#00FFCC';
-        isReconnecting = false; // 成功連線，重置重連狀態
+        isPeerConnecting = false; // 連線成功，解開狀態鎖
     } else {
         dot.style.background = '#52525B';
         dot.style.boxShadow = 'none';
@@ -234,17 +236,27 @@ function updateOnlineStatus(isOnline) {
 
 function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
-    安全銷毀舊連線();
+    強制銷毀舊連線實體();
     if (currentFriendPk) Storage.clearSession(currentFriendPk);
     location.href = location.pathname;
 }
 
+// 核心重構：改用非阻塞、無遞迴的安全重連發射器
 async function triggerNostrReconnect() {
-    if (!currentFriendPk || isReconnecting) return;
-    isReconnecting = true;
-    updateOnlineStatus(false);
+    if (!currentFriendPk || isPeerConnecting) return;
+    
+    // 如果現在已經成功直連了，不需要重連
+    if (p2pPeer && p2pPeer.connected) {
+        updateOnlineStatus(true);
+        return;
+    }
 
-    安全銷毀舊連線();
+    isPeerConnecting = true;
+    updateOnlineStatus(false);
+    強制銷毀舊連線實體();
+
+    // 重新標記為發起中狀態
+    isPeerConnecting = true; 
 
     p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: undefined });
     p2pPeer.on('signal', async (newWebrtcData) => {
@@ -252,26 +264,32 @@ async function triggerNostrReconnect() {
         const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
         await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
     });
-    setupPeerEvents();
-}
-
-function setupPeerEvents() {
-    p2pPeer.on('connect', () => {
-        showChatInterface();
-        updateOnlineStatus(true);
-    });
-
+    
+    // 注意：這裡完全移除了 p2pPeer.on('close') 和 on('error') 的自動重連監聽！
+    // 徹底將事件和重連拆分，避免死循環
+    p2pPeer.on('connect', () => updateOnlineStatus(true));
     p2pPeer.on('data', (data) => {
         const text = data.toString();
         Storage.saveMessageLog(currentFriendPk, text, 'friend');
         appendMessage(text, 'friend');
     });
+}
 
-    // 只有當不是主動發起的銷毀時，才觸發自動重連
-    p2pPeer.on('close', () => {
-        if (!isReconnecting) triggerNostrReconnect();
-    });
-    p2pPeer.on('error', () => {
-        if (!isReconnecting) triggerNostrReconnect();
+// 💡 替代 close 機制的黃金方案：建立一個主動「定時心跳監聽器（Heartbeat Check）」
+// 每隔 5 秒鐘檢查一次連線，如果斷開了才被動呼叫重連，這在移動端排版中是最高效穩定的作法！
+setInterval(() => {
+    if (currentFriendPk && (!p2pPeer || !p2pPeer.connected) && !isPeerConnecting) {
+        console.log("🔍 心跳偵測：目前處於離線，啟動安全被動重連管線...");
+        triggerNostrReconnect();
+    }
+}, 5000);
+
+function setupPeerEvents() {
+    // 保留這個空函式，防止 start 流程呼叫報錯
+    p2pPeer.on('connect', () => updateOnlineStatus(true));
+    p2pPeer.on('data', (data) => {
+        const text = data.toString();
+        Storage.saveMessageLog(currentFriendPk, text, 'friend');
+        appendMessage(text, 'friend');
     });
 }
