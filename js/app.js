@@ -11,7 +11,7 @@ let isNostrReady = false;
 let isReconnecting = false;
 let isInChatMode = false; 
 
-// 建議保留 STUN 伺服器以確保跨網路（如 Wi-Fi 與 5G）時的穿透率；若要追求完全本地零伺服器，可將 iceServers 設為 []
+// 保留 STUN 伺服器配置以維持跨網域的穿透穩定性
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -273,7 +273,6 @@ function showChatInterface() {
     
     const chatUI = document.getElementById('chat-interface');
     chatUI.style.display = 'flex';
-    chatUI.style.pointerEvents = 'auto'; 
 }
 
 function updateOnlineStatus(isOnline) {
@@ -350,7 +349,7 @@ async function triggerNostrReconnect() {
     updateOnlineStatus(false);
     強制銷毀舊連線實體();
 
-    // 💡 【核心防碰撞鎖定】：比對公鑰字典序
+    // 💡 防碰撞鎖定：只有公鑰排序大的一方主動送 Offer，小的一方只負責靜候被動接收
     const amIInitiator = myKeyPair.pk > currentFriendPk;
 
     if (amIInitiator) {
@@ -366,10 +365,11 @@ async function triggerNostrReconnect() {
             await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
         });
     } else {
-        console.log("⏳ [接收端] 靜態轉入被動模式，等待主導端重連信號...");
+        console.log("⏳ [接收端] 被動靜候模式，等待主導端重連信號...");
         p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
         setupPeerEvents();
-        // 允許 8 秒後若仍未連線成功，解除重連鎖定以防單向死結
+        
+        // 8秒超時保護，防單向永久鎖死
         setTimeout(() => { isReconnecting = false; }, 8000);
     }
 }
