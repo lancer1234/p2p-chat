@@ -1,5 +1,5 @@
 export class NostrManager {
-  constructor(relayUrl = 'wss://nos.lol') { // 預設直接改用連線速度較快的 nos.lol
+  constructor(relayUrl = 'wss://nos.lol') {
     this.relayUrl = relayUrl;
     this.relay = null;
   }
@@ -19,7 +19,6 @@ export class NostrManager {
     if (!this.relay) return;
 
     try {
-      // 修正點：顯式轉換私鑰型態，確保相容性
       const hexSk = typeof mySk === 'string' ? mySk : window.NostrTools.bytesToHex(mySk);
       
       const event = {
@@ -43,17 +42,21 @@ export class NostrManager {
     if (!this.relay) return null;
 
     try {
-      // 修正點：用最安全、絕對不會引發 SyntaxError 的動態鍵值宣告方式
       const filter = {
         kinds: [4],
-        authors: [friendPk]
+        '#p': [myPk]
       };
-      filter['#p'] = [myPk]; // 安全地塞入 #p 標籤條件
+      
+      // 優化點：如果指定特定好友就篩選，若是 'any' 則允許接收任何新人的初次握手 offer
+      if (friendPk !== 'any') {
+        filter.authors = [friendPk];
+      }
 
       const sub = this.relay.sub([filter]);
 
       sub.on('event', (event) => {
-        onMessageReceived(event.content);
+        // 回傳加密內容，並把發送者的公鑰（event.pubkey）一併帶回，以便辨識是誰拋來的 Offer
+        onMessageReceived(event.content, event.pubkey);
       });
 
       return sub;
