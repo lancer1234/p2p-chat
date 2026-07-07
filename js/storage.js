@@ -15,7 +15,7 @@ export const Storage = {
     }
     friends[friendPk] = { name, sharedSecret: secretStr };
     localStorage.setItem('friends', JSON.stringify(friends));
-    localStorage.setItem('last_chat_pk', friendPk); // 紀錄最後通話的好友 PK
+    localStorage.setItem('last_chat_pk', friendPk);
   },
   getFriends() {
     return JSON.parse(localStorage.getItem('friends') || '{}');
@@ -23,14 +23,20 @@ export const Storage = {
   getLastChatPk() {
     return localStorage.getItem('last_chat_pk');
   },
-  // 新增：儲存單條聊天紀錄到本地庫
   saveMessageLog(friendPk, text, sender) {
     const logs = JSON.parse(localStorage.getItem(`logs_${friendPk}`) || '[]');
     logs.push({ text, sender, timestamp: Date.now() });
     localStorage.setItem(`logs_${friendPk}`, JSON.stringify(logs));
   },
-  // 新增：讀取歷史對話紀錄
   getMessageLogs(friendPk) {
     return JSON.parse(localStorage.getItem(`logs_${friendPk}`) || '[]');
+  },
+  // 新增：徹底清除本地與該好友的對話快取，實現無痕離開
+  clearSession(friendPk) {
+    localStorage.removeItem(`logs_${friendPk}`);
+    localStorage.removeItem('last_chat_pk');
+    const friends = JSON.parse(localStorage.getItem('friends') || '{}');
+    delete friends[friendPk];
+    localStorage.setItem('friends', JSON.stringify(friends));
   }
 };
