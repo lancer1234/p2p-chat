@@ -1,9 +1,12 @@
 export const Storage = {
   // 保存自己的 Nostr 私鑰與公鑰
   saveKeyPair(sk, pk) {
-    // 修正點：如果是 Uint8Array，先轉成標準 Hex 字串再存入
-    const skHex = typeof sk === 'string' ? sk : window.NostrTools.bytesToHex(sk);
-    localStorage.setItem('my_sk', skHex);
+    // 確保存入的絕對是純字串，如果傳進來的是 Uint8Array 則進行轉換
+    let skStr = sk;
+    if (sk instanceof Uint8Array || typeof sk === 'object') {
+      skStr = Array.from(sk).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    localStorage.setItem('my_sk', skStr);
     localStorage.setItem('my_pk', pk);
   },
   
@@ -17,10 +20,14 @@ export const Storage = {
   // 保存好友資料
   saveFriend(friendPk, sharedSecret, name = '當面加的好友') {
     const friends = JSON.parse(localStorage.getItem('friends') || '{}');
-    // 修正點：共享金鑰同樣確保轉換為字串保存
-    const secretHex = typeof sharedSecret === 'string' ? sharedSecret : window.NostrTools.bytesToHex(sharedSecret);
     
-    friends[friendPk] = { name, sharedSecret: secretHex, status: 'offline' };
+    // 確保轉成純 Hex 字串存檔
+    let secretStr = sharedSecret;
+    if (sharedSecret instanceof Uint8Array || typeof sharedSecret === 'object') {
+      secretStr = Array.from(sharedSecret).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+    
+    friends[friendPk] = { name, sharedSecret: secretStr, status: 'offline' };
     localStorage.setItem('friends', JSON.stringify(friends));
   },
   
