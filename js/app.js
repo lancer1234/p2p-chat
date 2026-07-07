@@ -4,14 +4,14 @@ import { NostrManager } from './nostr.js';
 
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
-let currentFriendPk = localStorage.getItem('last_chat_pk'); // 採用最穩定的原生 LocalStorage 讀取
-let nostr = new NostrManager(); // 自動啟用多中繼站連線池
+let currentFriendPk = localStorage.getItem('last_chat_pk'); 
+let nostr = new NostrManager(); 
 
-// 🔐 移動端與私密轉送專用核心鎖，防阻並發訊號卡死
+// 🔐 移動端與私密轉送專用核心鎖
 let isNostrReady = false;
 let isReconnecting = false;
+let isInChatMode = false; // 🌟 新增狀態鎖：用來判斷使用者目前到底是在「首頁選單」還是「聊天室內」
 
-// 🌐 穿透 iCloud 私密轉送與複雜 NAT 防火牆的公共 STUN 伺服器
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -33,18 +33,19 @@ nostr.connect().then(() => {
     console.log("🌐 Nostr 網路骨幹已成功通電");
     isNostrReady = true;
 
-    // 監聽所有已知好友（包含重連與離開提示）
+    // 監聽所有已知好友
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
     });
 
+    // 🌟 修正點：只有當本地有歷史紀錄，且使用者不是主動退回首頁時，才全自動回復聊天
     if (currentFriendPk) {
+        isInChatMode = true; // 進入聊天模式
         showChatInterface();
         restoreChatLogs();
         updateOnlineStatus(false);
         
-        // 給手機版瀏覽器 2 秒安全緩衝，等待多中繼站訂閱完全就位
         setTimeout(() => {
             triggerNostrReconnect();
         }, 2000);
@@ -70,7 +71,10 @@ function 強制銷毀舊連線實體() {
 }
 
 function startAsInitiator() {
+    // 🌟 修正點：既然要產生全新 QR Code，明確聲明目前還不是聊天模式
+    isInChatMode = false; 
     強制銷毀舊連線實體();
+    
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
     container.style.display = 'block';
@@ -80,9 +84,12 @@ function startAsInitiator() {
     qr.make();
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
-    // 建立 QR Code 時立刻開啟全域聽筒，100% 準確接住對方的初始訊號
+    // 開啟全域聽筒，等待初次對接
     nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
         try {
+            // 🌟 防呆：如果我已經在跟別人聊天了，或者已經連上了，就不理會外部的新 Offer
+            if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
+
             if (!authorPk) return;
             const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, encryptedContent);
             if (!decryptedText) return;
@@ -90,7 +97,6 @@ function startAsInitiator() {
             let data;
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
-            // 處理初次掃碼直連
             if (data && data.type === 'init-offer') {
                 currentFriendPk = authorPk;
                 localStorage.setItem('last_chat_pk', currentFriendPk);
@@ -98,7 +104,7 @@ function startAsInitiator() {
                 強制銷毀舊連線實體();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
-                setupPeerEvents(); // 必須在 signal 前綁定事件
+                setupPeerEvents(); 
                 p2pPeer.signal(data.sdp);
 
                 p2pPeer.on('signal', async (webrtcAnswer) => {
@@ -110,27 +116,8 @@ function startAsInitiator() {
                 const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
                 Storage.saveFriend(currentFriendPk, sharedSecret);
                 
-                showChatInterface();
-                restoreChatLogs();
-            } 
-            // 處理因為時間差或私密轉送干擾導致的被動重連請求
-            else if (data && data.type === 'reconnect-offer') {
-                currentFriendPk = authorPk;
-                localStorage.setItem('last_chat_pk', currentFriendPk);
-                const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
-                Storage.saveFriend(currentFriendPk, sharedSecret);
-                
-                強制銷毀舊連線實體();
-                p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
-                setupPeerEvents();
-                p2pPeer.signal(data.sdp);
-
-                p2pPeer.on('signal', async (myNewAnswer) => {
-                    const reconnectAnswer = { type: 'reconnect-answer', sdp: myNewAnswer };
-                    const encAnswer = await Crypto.encryptData(myKeyPair.sk, authorPk, JSON.stringify(reconnectAnswer));
-                    await nostr.sendEvent(myKeyPair.sk, authorPk, encAnswer);
-                });
-                
+                // 順利接通，解鎖進聊天室
+                isInChatMode = true;
                 showChatInterface();
                 restoreChatLogs();
             }
@@ -139,6 +126,7 @@ function startAsInitiator() {
 }
 
 function startCameraScan() {
+    isInChatMode = false;
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
 
@@ -155,6 +143,8 @@ function startCameraScan() {
             currentFriendPk = decodedFriendPk;
             localStorage.setItem('last_chat_pk', currentFriendPk);
             
+            // 掃碼完畢，正式踏入聊天室預備狀態
+            isInChatMode = true; 
             showChatInterface();
             appendMessage("已成功掃描信任密鑰，正在背景交換加密信道協議...", "system");
 
@@ -187,13 +177,15 @@ function listenForMessages(friendPk) {
             let data;
             try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
-            // 接收對方的離開提示
             if (data.type === 'leave') {
                 appendMessage("❌ 對方已中斷連線並離開了聊天室。", "system");
                 updateOnlineStatus(false);
                 強制銷毀舊連線實體();
                 return;
             }
+
+            // 💡 修正點：只有當我們此時確定在聊天模式下，才去響應重連 offer/answer
+            if (!isInChatMode) return;
 
             if (data.type === 'init-answer') {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
@@ -212,7 +204,6 @@ function listenForMessages(friendPk) {
                     await nostr.sendEvent(myKeyPair.sk, senderPk, encAnswer);
                 });
             } else if (data.type === 'reconnect-answer') {
-                console.log("📥 收到重連回應 answer！");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -286,6 +277,8 @@ function updateOnlineStatus(isOnline) {
 async function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
     
+    isInChatMode = false; // 退出聊天模式
+
     if (currentFriendPk && isNostrReady) {
         try {
             const leavePackage = { type: 'leave' };
@@ -296,10 +289,10 @@ async function leaveChat() {
 
     強制銷毀舊連線實體();
     if (currentFriendPk) Storage.clearSession(currentFriendPk);
+    localStorage.removeItem('last_chat_pk'); // 確實拔除紀錄
     location.href = location.pathname;
 }
 
-// 💡 核心優化：整合並校正事件監聽綁定
 function setupPeerEvents() {
     if (!p2pPeer) return;
 
@@ -315,21 +308,19 @@ function setupPeerEvents() {
     });
 
     p2pPeer.on('close', () => { 
-        console.log("❌ WebRTC 連線關閉");
         isReconnecting = false; 
         updateOnlineStatus(false); 
     });
 
     p2pPeer.on('error', (err) => { 
-        console.error("🔺 WebRTC 連線錯誤:", err);
         isReconnecting = false; 
         updateOnlineStatus(false); 
     });
 }
 
-// 主動重連行程
 async function triggerNostrReconnect() {
-    if (!currentFriendPk || !isNostrReady || isReconnecting) return;
+    // 🌟 修正點：如果不在聊天模式下（比如正在看首頁或準備配對），嚴行禁止觸發重連，防堵 UI 被篡改
+    if (!isInChatMode || !currentFriendPk || !isNostrReady || isReconnecting) return;
     
     if (p2pPeer && p2pPeer.connected) {
         updateOnlineStatus(true);
@@ -344,10 +335,10 @@ async function triggerNostrReconnect() {
     console.log("🔄 正在發射主動重連協議...");
 
     p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
-    setupPeerEvents(); // 確保在信號發射前就開始監聽連線事件
+    setupPeerEvents(); 
 
     p2pPeer.on('signal', async (newWebrtcData) => {
-        if (!currentFriendPk) return;
+        if (!currentFriendPk || !isInChatMode) return;
         
         const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
         const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
@@ -355,9 +346,9 @@ async function triggerNostrReconnect() {
     });
 }
 
-// 💡 守護常駐心跳偵測：每 5 秒安全排查
+// 💡 守護常駐心跳偵測：只有在聊天模式內才會執行斷線重連檢查
 setInterval(() => {
-    if (currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
+    if (isInChatMode && currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
         console.log("🔍 心跳排查：直連中斷，雙向主動提議發動中...");
         triggerNostrReconnect();
     }
