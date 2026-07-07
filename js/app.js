@@ -11,6 +11,7 @@ let isNostrReady = false;
 let isReconnecting = false;
 let isInChatMode = false; 
 
+// 建議保留 STUN 伺服器以確保跨網路（如 Wi-Fi 與 5G）時的穿透率；若要追求完全本地零伺服器，可將 iceServers 設為 []
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -89,16 +90,14 @@ function startAsInitiator() {
                 
                 let data = null;
 
-                // 💡 【超核心防禦分流】：先嘗試將內容當作純文字直接解析 JSON
                 try {
                     data = JSON.parse(rawContent);
                 } catch (jsonErr) {
-                    // 如果解析失敗，代表這是一串加密密文，這時才允許送去解密，徹底治癒 Invalid padding
                     try {
                         const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, rawContent);
                         if (decryptedText) data = JSON.parse(decryptedText);
                     } catch (cryptoErr) {
-                        return; // 真的解不開就默默退出，絕對不報錯、不崩潰
+                        return; 
                     }
                 }
 
@@ -118,8 +117,7 @@ function startAsInitiator() {
                         await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
                     });
 
-                    const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
-                    Storage.saveFriend(currentFriendPk, sharedSecret);
+                    Storage.saveFriend(currentFriendPk);
                     
                     isInChatMode = true;
                     showChatInterface();
@@ -172,9 +170,7 @@ function startCameraScan() {
                 await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
             });
 
-            const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
-            Storage.saveFriend(currentFriendPk, sharedSecret);
-
+            Storage.saveFriend(currentFriendPk);
             listenForMessages(currentFriendPk);
         },
         () => {}
@@ -188,7 +184,6 @@ function listenForMessages(friendPk) {
             const senderPk = authorPk || friendPk;
             let data = null;
             
-            // 💡 【超核心防禦分流】：通用全域聽筒防崩潰
             try {
                 data = JSON.parse(rawContent);
             } catch (jsonErr) {
@@ -215,6 +210,7 @@ function listenForMessages(friendPk) {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
+                console.log("📥 收到重連提議 (Offer)，轉為接收端應答...");
                 強制銷毀舊連線實體();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
@@ -227,6 +223,7 @@ function listenForMessages(friendPk) {
                     await nostr.sendEvent(myKeyPair.sk, senderPk, encAnswer);
                 });
             } else if (data.type === 'reconnect-answer') {
+                console.log("📥 收到重連應答 (Answer)，直連管道建立中...");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -292,7 +289,7 @@ function updateOnlineStatus(isOnline) {
     } else {
         dot.style.background = '#52525B';
         dot.style.boxShadow = 'none';
-        text.innerText = 'OFFLINE (RECONNECTING)';
+        text.innerText = isReconnecting ? 'OFFLINE (RECONNECTING)' : 'OFFLINE';
         text.style.color = '#52525B';
     }
 }
@@ -353,19 +350,28 @@ async function triggerNostrReconnect() {
     updateOnlineStatus(false);
     強制銷毀舊連線實體();
 
-    isReconnecting = true; 
-    console.log("🔄 正在發射主動重連協議...");
+    // 💡 【核心防碰撞鎖定】：比對公鑰字典序
+    const amIInitiator = myKeyPair.pk > currentFriendPk;
 
-    p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
-    setupPeerEvents(); 
+    if (amIInitiator) {
+        console.log("🔄 [主導端] 正在發射主動重連協議 Offer...");
+        p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
+        setupPeerEvents(); 
 
-    p2pPeer.on('signal', async (newWebrtcData) => {
-        if (!currentFriendPk || !isInChatMode) return;
-        
-        const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
-        const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
-        await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
-    });
+        p2pPeer.on('signal', async (newWebrtcData) => {
+            if (!currentFriendPk || !isInChatMode) return;
+            
+            const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
+            const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
+            await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
+        });
+    } else {
+        console.log("⏳ [接收端] 靜態轉入被動模式，等待主導端重連信號...");
+        p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
+        setupPeerEvents();
+        // 允許 8 秒後若仍未連線成功，解除重連鎖定以防單向死結
+        setTimeout(() => { isReconnecting = false; }, 8000);
+    }
 }
 
 setInterval(() => {
