@@ -7,7 +7,6 @@ let p2pPeer = null;
 let currentFriendPk = localStorage.getItem('last_chat_pk'); 
 let nostr = new NostrManager(); 
 
-// 🔐 移動端與私密轉送專用核心狀態鎖
 let isNostrReady = false;
 let isReconnecting = false;
 let isInChatMode = false; 
@@ -15,9 +14,7 @@ let isInChatMode = false;
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' }
     ]
 };
 
@@ -28,18 +25,15 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
-// 網頁啟動生命週期
 nostr.connect().then(() => {
     console.log("🌐 Nostr 網路骨幹已成功通電");
     isNostrReady = true;
 
-    // 監聽所有已知好友
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForMessages(friendPk);
     });
 
-    // 如果本地有歷史紀錄，且使用者不是主動退回首頁時，才自動回復聊天
     if (currentFriendPk) {
         isInChatMode = true; 
         showChatInterface();
@@ -48,7 +42,7 @@ nostr.connect().then(() => {
         
         setTimeout(() => {
             triggerNostrReconnect();
-        }, 2000);
+        }, 1500);
     }
 });
 
@@ -71,7 +65,6 @@ function 強制銷毀舊連線實體() {
 }
 
 function startAsInitiator() {
-    // 明確洗掉配對狀態與舊快取
     localStorage.removeItem('last_chat_pk');
     currentFriendPk = null;
     isInChatMode = false; 
@@ -87,7 +80,6 @@ function startAsInitiator() {
     qr.make();
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
-    // 🌟 核心防漏優化：發起方建立 QR Code 後，每 3 秒強行刷新一次廣播監聽，確保 100% 抓到 B 的 init-offer
     const initSub = () => {
         if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
         nostr.subscribeToFriend(myKeyPair.pk, 'any', async (encryptedContent, authorPk) => {
@@ -102,7 +94,7 @@ function startAsInitiator() {
                 try { data = JSON.parse(decryptedText); } catch(jsonErr) { return; }
 
                 if (data && data.type === 'init-offer') {
-                    clearInterval(initTimer); // 成功捕獲，銷毀定時器
+                    clearInterval(initTimer);
                     currentFriendPk = authorPk;
                     localStorage.setItem('last_chat_pk', currentFriendPk);
                     
@@ -132,7 +124,6 @@ function startAsInitiator() {
     initSub();
     const initTimer = setInterval(() => {
         if (!isInChatMode && (!p2pPeer || !p2pPeer.connected)) {
-            console.log("🔄 背景配對聽筒全自動對焦刷新...");
             initSub();
         } else {
             clearInterval(initTimer);
@@ -207,7 +198,6 @@ function listenForMessages(friendPk) {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                console.log("📥 收到重連請求 offer...");
                 強制銷毀舊連線實體();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
