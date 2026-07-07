@@ -7,13 +7,12 @@ let p2pPeer = null;
 let currentFriendPk = null;
 let nostr = new NostrManager('wss://nos.lol');
 
-// 初始化或生成 Nostr 金鑰
 if (!myKeyPair.sk || !myKeyPair.pk) {
     const sk = window.NostrTools.generatePrivateKey();
     const pk = window.NostrTools.getPublicKey(sk);
     Storage.saveKeyPair(sk, pk);
     myKeyPair = { sk, pk };
-    console.log("為您生成全新的 Nostr 身份:", pk);
+    console.log("全新身分已就緒:", pk);
 }
 
 nostr.connect().then(() => {
@@ -25,10 +24,12 @@ nostr.connect().then(() => {
 
 document.getElementById('btn-create').addEventListener('click', startAsInitiator);
 document.getElementById('btn-scan').addEventListener('click', startCameraScan);
+document.getElementById('btn-send').addEventListener('click', sendMessage);
+document.getElementById('input-msg').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') sendMessage();
+});
 
 function startAsInitiator() {
-    alert("正在建立 WebRTC 連線，請稍候...");
-    
     p2pPeer = new window.SimplePeer({
         initiator: true,
         trickle: false,
@@ -42,12 +43,17 @@ function startAsInitiator() {
             pubkey: myKeyPair.pk
         };
         
-        const qrContent = JSON.stringify(connectionPackage);
+        // 核心優化：將原本沉重的 JSON 利用 lz-string 進行大幅壓縮，大幅縮小 QR Code 顆粒度
+        const compressedData = window.LZString.compressToEncodedURIComponent(JSON.stringify(connectionPackage));
+        
         const container = document.getElementById('qrcode-container');
+        container.style.display = 'block';
+        document.getElementById('setup-container').style.display = 'none'; // 隱藏主選單，優化版面
+        
         const qr = window.qrcode(0, 'M');
-        qr.addData(qrContent);
+        qr.addData(compressedData); // 餵入壓縮後的精簡代碼
         qr.make();
-        container.innerHTML = '<h3>請對方掃描此 QR Code：</h3>' + qr.createImgTag(5);
+        container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(5);
 
         startCameraScanForAnswer();
     });
@@ -56,27 +62,34 @@ function startAsInitiator() {
 }
 
 function startCameraScan() {
+    document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
 
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
     html5QrcodeScanner.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: 250 },
+        { fps: 15, qrbox: 220 }, // 優化偵測框形
         async (decodedText) => {
             await html5QrcodeScanner.stop();
             document.getElementById('reader').style.display = 'none';
             
             try {
-                const incomingData = JSON.parse(decodedText);
+                // 解壓縮還原封包
+                const decompressed = window.LZString.decompressFromEncodedURIComponent(decodedText);
+                const incomingData = JSON.parse(decompressed);
                 if (incomingData.type === 'offer') {
                     handleIncomingOffer(incomingData);
                 }
             } catch (e) {
-                alert("無效的 QR Code 格式！");
+                alert("QR Code 解析失敗或格式不符");
+                location.reload();
             }
         },
         () => {}
-    ).catch(() => alert("相機啟動失敗，請確認是否為 HTTPS 環境並允許權限"));
+    ).catch(() => {
+        alert("相機異常");
+        location.reload();
+    });
 }
 
 function handleIncomingOffer(offerPackage) {
@@ -100,11 +113,16 @@ function handleIncomingOffer(offerPackage) {
         const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
         Storage.saveFriend(currentFriendPk, sharedSecret, "當面加的好友");
 
+        // 核心優化：對 Response 封包進行二次壓縮
+        const compressedAnswer = window.LZString.compressToEncodedURIComponent(JSON.stringify(answerPackage));
+
         const container = document.getElementById('qrcode-container');
+        container.style.display = 'block';
+        
         const qr = window.qrcode(0, 'M');
-        qr.addData(JSON.stringify(answerPackage));
+        qr.addData(compressedAnswer);
         qr.make();
-        container.innerHTML = '<h3>請發起方掃描此回應 QR Code：</h3>' + qr.createImgTag(5);
+        container.innerHTML = '<h3>請發起方反掃此回應 QR Code</h3>' + qr.createImgTag(5);
     });
 
     setupPeerEvents();
@@ -116,14 +134,16 @@ function startCameraScanForAnswer() {
     
     html5QrcodeScanner.start(
         { facingMode: "environment" },
-        { fps: 10, qrbox: 250 },
+        { fps: 15, qrbox: 220 },
         async (decodedText) => {
             try {
-                const incomingData = JSON.parse(decodedText);
+                // 解壓縮還原 Answer 封包
+                const decompressed = window.LZString.decompressFromEncodedURIComponent(decodedText);
+                const incomingData = JSON.parse(decompressed);
                 if (incomingData.type === 'answer') {
                     await html5QrcodeScanner.stop();
                     document.getElementById('reader').style.display = 'none';
-                    document.getElementById('qrcode-container').innerHTML = '';
+                    document.getElementById('qrcode-container').style.display = 'none';
 
                     currentFriendPk = incomingData.pubkey;
                     const sharedSecret = await Crypto.getSharedSecret(myKeyPair.sk, currentFriendPk);
@@ -134,11 +154,34 @@ function startCameraScanForAnswer() {
             } catch (e) { console.error(e); }
         },
         () => {}
-    ).catch(err => console.error("Answer 相機啟動失敗", err)); // 修正點：補齊了原本殘缺的結構與括號
+    ).catch(err => console.error(err));
+}
+
+function sendMessage() {
+    const input = document.getElementById('input-msg');
+    const text = input.value.trim();
+    if (!text || !p2pPeer) return;
+
+    p2pPeer.send(text);
+    appendMessage(text, 'me');
+    input.value = '';
+}
+
+function appendMessage(text, sender) {
+    const box = document.getElementById('chat-messages');
+    const msgDiv = document.createElement('div');
+    msgDiv.classList.add('msg', sender);
+    msgDiv.innerText = text;
+    box.appendChild(msgDiv);
+    box.scrollTop = box.scrollHeight;
 }
 
 async function triggerNostrReconnect() {
     if (!currentFriendPk) return;
+    document.getElementById('status-dot').style.background = '#EF4444';
+    document.getElementById('status-dot').style.boxShadow = '0 0 8px #EF4444';
+    appendMessage("連線中斷，正在透過 Nostr 機制建立二次握手...", "system");
+
     const friends = Storage.getFriends();
     const friendData = friends[currentFriendPk];
     if (!friendData) return;
@@ -168,7 +211,7 @@ function listenForReconnect(friendPk) {
                 p2pPeer = new window.SimplePeer({
                     initiator: false,
                     trickle: false,
-                    config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+                    config: undefined
                 });
 
                 p2pPeer.on('signal', async (myNewAnswer) => {
@@ -188,13 +231,22 @@ function listenForReconnect(friendPk) {
 
 function setupPeerEvents() {
     p2pPeer.on('connect', () => {
-        alert("🎉 P2P 通道建立成功！");
-        document.getElementById('qrcode-container').innerHTML = "";
-        p2pPeer.send(`哈囉！這是一條不經伺服器的加密私訊。`);
+        document.getElementById('setup-container').style.display = 'none';
+        document.getElementById('qrcode-container').style.display = 'none';
+        document.getElementById('reader').style.display = 'none';
+        
+        // 展現滿版極簡聊天介面
+        const chatUI = document.getElementById('chat-interface');
+        chatUI.style.display = 'flex'; 
+        document.getElementById('status-dot').style.background = '#00FFCC';
+        document.getElementById('status-dot').style.boxShadow = '0 0 8px #00FFCC';
+        
+        const box = document.getElementById('chat-messages');
+        box.innerHTML = `<div class="msg system">SECURE END-TO-END CHANNEL ESTABLISHED</div>`;
     });
 
     p2pPeer.on('data', (data) => {
-        alert(`【收到端對端訊息】：\n${data.toString()}`);
+        appendMessage(data.toString(), 'friend');
     });
 
     p2pPeer.on('close', () => triggerNostrReconnect());
