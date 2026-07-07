@@ -4,10 +4,9 @@ import { NostrManager } from './nostr.js';
 
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
-let currentFriendPk = Storage.getLastChatPk(); // 重新整理時自動繼承上次聊天的好友 PK
+let currentFriendPk = Storage.getLastChatPk(); 
 let nostr = new NostrManager('wss://nos.lol');
 
-// 初始化或生成 Nostr 金鑰
 if (!myKeyPair.sk || !myKeyPair.pk) {
     const sk = window.NostrTools.generatePrivateKey();
     const pk = window.NostrTools.getPublicKey(sk);
@@ -15,27 +14,24 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
-// 網頁初始化與重新整理的生命週期管理
 nostr.connect().then(() => {
     if (currentFriendPk) {
-        // 如果本地本來就有配對成功的好友紀錄，直接進入聊天室並還原歷史訊息
         showChatInterface();
         restoreChatLogs();
-        // 在背景悄悄發動 Nostr 二次握手重連，不干擾使用者讀取舊訊息
+        updateOnlineStatus(false); // 預設顯示離線，等待背景重連握手
         triggerNostrReconnect();
     }
     
-    // 同步訂閱所有已知好友的重連通道
     const friends = Storage.getFriends();
     Object.keys(friends).forEach(friendPk => {
         listenForReconnect(friendPk);
     });
 });
 
-// 事件監聽綁定
 document.getElementById('btn-create').addEventListener('click', startAsInitiator);
 document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 document.getElementById('btn-send').addEventListener('click', sendMessage);
+document.getElementById('btn-leave').addEventListener('click', leaveChat); // 綁定離開對話按鈕
 document.getElementById('input-msg').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
@@ -45,7 +41,6 @@ function startAsInitiator() {
 
     p2pPeer.on('signal', async (webrtcData) => {
         const connectionPackage = { type: 'offer', sdp: webrtcData, pubkey: myKeyPair.pk };
-        // 大幅壓縮 SDP 封包，縮小 QR Code 顆粒度以利手機秒掃
         const compressedData = window.LZString.compressToEncodedURIComponent(JSON.stringify(connectionPackage));
         
         document.getElementById('setup-container').style.display = 'none';
@@ -55,7 +50,7 @@ function startAsInitiator() {
         const qr = window.qrcode(0, 'M');
         qr.addData(compressedData);
         qr.make();
-        container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6); // 增粗點陣顆粒，放大至 85% 滿版
+        container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
         startCameraScanForAnswer();
     });
@@ -143,11 +138,12 @@ function sendMessage() {
 
     if (p2pPeer && p2pPeer.connected) {
         p2pPeer.send(text);
+        Storage.saveMessageLog(currentFriendPk, text, 'me');
+        appendMessage(text, 'me');
+        input.value = '';
+    } else {
+        appendMessage("⚠️ 目前處於離線狀態，無法送出訊息。", "system");
     }
-    // 傳出當下立刻持久化寫入本地庫並渲染
-    Storage.saveMessageLog(currentFriendPk, text, 'me');
-    appendMessage(text, 'me');
-    input.value = '';
 }
 
 function appendMessage(text, sender) {
@@ -159,7 +155,6 @@ function appendMessage(text, sender) {
     box.scrollTop = box.scrollHeight;
 }
 
-// 從儲存庫中抓出歷史紀錄還原至畫面上
 function restoreChatLogs() {
     const box = document.getElementById('chat-messages');
     box.innerHTML = '';
@@ -172,7 +167,6 @@ function restoreChatLogs() {
     }
 }
 
-// 切換為滿版聊天室 UI，並精準解鎖手指點擊穿透限制
 function showChatInterface() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('qrcode-container').style.display = 'none';
@@ -180,13 +174,42 @@ function showChatInterface() {
     
     const chatUI = document.getElementById('chat-interface');
     chatUI.style.display = 'flex';
-    chatUI.style.pointerEvents = 'auto'; // 解決隱形圖層攔截點擊的關鍵：解除穿透，恢復聊天室點擊！
+    chatUI.style.pointerEvents = 'auto'; 
+}
+
+// 新增：管理對方是否在線上的 UI 燈號更新
+function updateOnlineStatus(isOnline) {
+    const dot = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    if (isOnline) {
+        dot.style.background = '#00FFCC';
+        dot.style.boxShadow = '0 0 8px #00FFCC';
+        text.innerText = 'ONLINE';
+        text.style.color = '#00FFCC';
+    } else {
+        dot.style.background = '#52525B'; // 灰燈代表對方目前不在線上
+        dot.style.boxShadow = 'none';
+        text.innerText = 'OFFLINE (RECONNECTING)';
+        text.style.color = '#52525B';
+    }
+}
+
+// 新增：離開對話的核心函數
+function leaveChat() {
+    if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
+    
+    if (p2pPeer) {
+        try { p2pPeer.destroy(); } catch(e) {}
+    }
+    if (currentFriendPk) {
+        Storage.clearSession(currentFriendPk);
+    }
+    location.href = location.pathname; // 重新洗牌，回到乾淨的首頁邀請狀態
 }
 
 async function triggerNostrReconnect() {
     if (!currentFriendPk) return;
-    document.getElementById('status-dot').style.background = '#52525B'; // 顯示灰色：嘗試連線中
-    document.getElementById('status-dot').style.boxShadow = 'none';
+    updateOnlineStatus(false); // 觸發重連時，立刻切為離線燈號
 
     const friends = Storage.getFriends();
     const friendData = friends[currentFriendPk];
@@ -228,13 +251,11 @@ function listenForReconnect(friendPk) {
 function setupPeerEvents() {
     p2pPeer.on('connect', () => {
         showChatInterface();
-        document.getElementById('status-dot').style.background = '#00FFCC'; // 連線成功：亮綠燈
-        document.getElementById('status-dot').style.boxShadow = '0 0 8px #00FFCC';
+        updateOnlineStatus(true); // 直連成功，秒切為 ONLINE 綠燈！
     });
 
     p2pPeer.on('data', (data) => {
         const text = data.toString();
-        // 接收端收到訊息後寫入本地持久化歷史庫
         Storage.saveMessageLog(currentFriendPk, text, 'friend');
         appendMessage(text, 'friend');
     });
