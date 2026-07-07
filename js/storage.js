@@ -7,13 +7,9 @@ export const Storage = {
   getMyKeys() {
     return { sk: localStorage.getItem('my_sk'), pk: localStorage.getItem('my_pk') };
   },
-  saveFriend(friendPk, sharedSecret, name = '當面加的好友') {
+  saveFriend(friendPk, name = '當面加的好友') {
     const friends = JSON.parse(localStorage.getItem('friends') || '{}');
-    let secretStr = sharedSecret;
-    if (sharedSecret instanceof Uint8Array || typeof sharedSecret === 'object') {
-      secretStr = Array.from(sharedSecret).map(b => b.toString(16).padStart(2, '0')).join('');
-    }
-    friends[friendPk] = { name, sharedSecret: secretStr };
+    friends[friendPk] = { name };
     localStorage.setItem('friends', JSON.stringify(friends));
     localStorage.setItem('last_chat_pk', friendPk);
   },
@@ -31,7 +27,6 @@ export const Storage = {
   getMessageLogs(friendPk) {
     return JSON.parse(localStorage.getItem(`logs_${friendPk}`) || '[]');
   },
-  // 新增：徹底清除本地與該好友的對話快取，實現無痕離開
   clearSession(friendPk) {
     localStorage.removeItem(`logs_${friendPk}`);
     localStorage.removeItem('last_chat_pk');
