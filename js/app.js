@@ -4,8 +4,8 @@ import { NostrManager } from './nostr.js';
 
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
-let currentFriendPk = localStorage.getItem('last_chat_pk'); // 物理隔離，直接改用最純粹的原生 LocalStorage 讀取
-let nostr = new NostrManager('wss://relay.damus.io'); // 【核心修正】：切換成對 P2P 握手最友善、無 PoW 挖礦限制的 Damus 高速節點
+let currentFriendPk = localStorage.getItem('last_chat_pk'); 
+let nostr = new NostrManager(); // 自動啟用連線池優化
 
 let isNostrReady = false;
 let isReconnecting = false;
@@ -84,7 +84,7 @@ function startAsInitiator() {
 
             if (data && data.type === 'init-offer') {
                 currentFriendPk = authorPk;
-                localStorage.setItem('last_chat_pk', currentFriendPk); // 核心修正：100% 採用原生寫法，拒絕呼叫外部物件
+                localStorage.setItem('last_chat_pk', currentFriendPk);
                 
                 強制銷毀舊連線實體();
                 
@@ -136,15 +136,13 @@ function startCameraScan() {
         { facingMode: "environment" },
         { fps: 20, qrbox: 250 }, 
         async (decodedFriendPk) => {
-            try {
-                await html5QrcodeScanner.stop();
-            } catch (err) {}
+            try { await html5QrcodeScanner.stop(); } catch (err) {}
             document.getElementById('reader').style.display = 'none';
             
             強制銷毀舊連線實體();
             
             currentFriendPk = decodedFriendPk;
-            localStorage.setItem('last_chat_pk', currentFriendPk); // 核心修正：100% 採用原生寫法，防阻崩潰
+            localStorage.setItem('last_chat_pk', currentFriendPk);
             
             showChatInterface();
             appendMessage("已成功掃描信任密鑰，正在背景交換加密信道協議...", "system");
@@ -206,6 +204,7 @@ function listenForMessages(friendPk) {
     });
 }
 
+// 以下保留不變 ... (sendMessage, appendMessage, restoreChatLogs, showChatInterface, updateOnlineStatus, leaveChat, triggerNostrReconnect, setInterval, setupPeerEvents)
 function sendMessage() {
     const input = document.getElementById('input-msg');
     const text = input.value.trim();
