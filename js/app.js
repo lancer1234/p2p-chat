@@ -4,9 +4,10 @@ import { NostrManager } from './nostr.js';
 
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
-let currentFriendPk = Storage.getLastChatPk(); // 優化點：重新整理時自動繼承上次聊天的好友 PK
+let currentFriendPk = Storage.getLastChatPk(); // 重新整理時自動繼承上次聊天的好友 PK
 let nostr = new NostrManager('wss://nos.lol');
 
+// 初始化或生成 Nostr 金鑰
 if (!myKeyPair.sk || !myKeyPair.pk) {
     const sk = window.NostrTools.generatePrivateKey();
     const pk = window.NostrTools.getPublicKey(sk);
@@ -14,13 +15,13 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
-// 核心重構：重新整理網頁時的生命週期判斷
+// 網頁初始化與重新整理的生命週期管理
 nostr.connect().then(() => {
     if (currentFriendPk) {
-        // 如果本地本來就有好友紀錄，直接免掃碼跳轉進聊天室，並還原紀錄
+        // 如果本地本來就有配對成功的好友紀錄，直接進入聊天室並還原歷史訊息
         showChatInterface();
         restoreChatLogs();
-        // 背景自動啟動 Nostr 二次握手重連
+        // 在背景悄悄發動 Nostr 二次握手重連，不干擾使用者讀取舊訊息
         triggerNostrReconnect();
     }
     
@@ -31,6 +32,7 @@ nostr.connect().then(() => {
     });
 });
 
+// 事件監聽綁定
 document.getElementById('btn-create').addEventListener('click', startAsInitiator);
 document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 document.getElementById('btn-send').addEventListener('click', sendMessage);
@@ -43,6 +45,7 @@ function startAsInitiator() {
 
     p2pPeer.on('signal', async (webrtcData) => {
         const connectionPackage = { type: 'offer', sdp: webrtcData, pubkey: myKeyPair.pk };
+        // 大幅壓縮 SDP 封包，縮小 QR Code 顆粒度以利手機秒掃
         const compressedData = window.LZString.compressToEncodedURIComponent(JSON.stringify(connectionPackage));
         
         document.getElementById('setup-container').style.display = 'none';
@@ -52,7 +55,7 @@ function startAsInitiator() {
         const qr = window.qrcode(0, 'M');
         qr.addData(compressedData);
         qr.make();
-        container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6); // 稍微加粗一點圖案顆粒
+        container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6); // 增粗點陣顆粒，放大至 85% 滿版
 
         startCameraScanForAnswer();
     });
@@ -130,7 +133,7 @@ function startCameraScanForAnswer() {
             } catch (e) { console.error(e); }
         },
         () => {}
-    );
+    ).catch(err => console.error(err));
 }
 
 function sendMessage() {
@@ -141,7 +144,7 @@ function sendMessage() {
     if (p2pPeer && p2pPeer.connected) {
         p2pPeer.send(text);
     }
-    // 無論 WebRTC 是否直連成功，只要發送，就先存入本地庫並渲染
+    // 傳出當下立刻持久化寫入本地庫並渲染
     Storage.saveMessageLog(currentFriendPk, text, 'me');
     appendMessage(text, 'me');
     input.value = '';
@@ -156,7 +159,7 @@ function appendMessage(text, sender) {
     box.scrollTop = box.scrollHeight;
 }
 
-// 還原聊天紀錄
+// 從儲存庫中抓出歷史紀錄還原至畫面上
 function restoreChatLogs() {
     const box = document.getElementById('chat-messages');
     box.innerHTML = '';
@@ -169,18 +172,26 @@ function restoreChatLogs() {
     }
 }
 
+// 切換為滿版聊天室 UI，並精準解鎖手指點擊穿透限制
 function showChatInterface() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('qrcode-container').style.display = 'none';
     document.getElementById('reader').style.display = 'none';
-    document.getElementById('chat-interface').style.display = 'flex';
+    
+    const chatUI = document.getElementById('chat-interface');
+    chatUI.style.display = 'flex';
+    chatUI.style.pointerEvents = 'auto'; // 解決隱形圖層攔截點擊的關鍵：解除穿透，恢復聊天室點擊！
 }
 
 async function triggerNostrReconnect() {
     if (!currentFriendPk) return;
-    document.getElementById('status-dot').style.background = '#52525B';
-    
-    // 如果目前完全沒有 Peer 或者是已經斷開的 Peer，則全新建立
+    document.getElementById('status-dot').style.background = '#52525B'; // 顯示灰色：嘗試連線中
+    document.getElementById('status-dot').style.boxShadow = 'none';
+
+    const friends = Storage.getFriends();
+    const friendData = friends[currentFriendPk];
+    if (!friendData) return;
+
     if (!p2pPeer || p2pPeer.destroyed) {
         p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: undefined });
         p2pPeer.on('signal', async (newWebrtcData) => {
@@ -217,12 +228,13 @@ function listenForReconnect(friendPk) {
 function setupPeerEvents() {
     p2pPeer.on('connect', () => {
         showChatInterface();
-        document.getElementById('status-dot').style.background = '#00FFCC';
+        document.getElementById('status-dot').style.background = '#00FFCC'; // 連線成功：亮綠燈
         document.getElementById('status-dot').style.boxShadow = '0 0 8px #00FFCC';
     });
 
     p2pPeer.on('data', (data) => {
         const text = data.toString();
+        // 接收端收到訊息後寫入本地持久化歷史庫
         Storage.saveMessageLog(currentFriendPk, text, 'friend');
         appendMessage(text, 'friend');
     });
