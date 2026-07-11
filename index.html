@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <!-- 🟢 修正後的 CSP 策略：只放行四大核心信令 WebSocket 節點與基本 CDN 資源 -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://nos.lol wss://relay.damus.io wss://relay.primal.net wss://relay.nostr.band; img-src 'self' data:;">
-    <title>📟 P2P Chat Enterprise Edition</title>
+    <title>📟 P2P Chat StateMachine Engine</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
@@ -49,6 +48,9 @@
         }
         button:active { background: var(--border); }
         #btn-create { border-color: rgba(0, 255, 204, 0.4); color: var(--accent); }
+        
+        /* 💡 新增的恢復對話按鈕：外觀呈現精緻的提示綠 */
+        #btn-resume { display: none; border-color: rgba(0, 255, 204, 0.2); color: #00CCAA; font-weight: 600; }
         
         #reader { width: 100%; max-width: 320px; margin: 20px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: none; }
         #qrcode-container { margin: 20px auto; width: 85vw; max-width: 340px; background: #FFF; padding: 24px; border-radius: 16px; display: none; box-shadow: 0 20px 40px rgba(0,0,0,0.6); text-align: center; }
@@ -98,6 +100,8 @@
         <h1>📟 P2P Chat</h1>
         <div class="subtitle">去中心化・本地端對端加密通訊</div>
         <div class="btn-group">
+            <!-- 💡 核心優化：提供明確的手動恢復按鈕，杜絕自動跳入舊聊天室的競態 BUG -->
+            <button id="btn-resume">⏳ 恢復上一次的加密對話</button>
             <button id="btn-create">1. 產生邀請 QR Code</button>
             <button id="btn-scan">2. 掃描對方 QR Code</button>
         </div>
@@ -111,7 +115,7 @@
         <div id="chat-header">
             <div class="status-container">
                 <div id="status-dot"></div>
-                <span id="status-text">CONNECTING</span>
+                <span id="status-text">IDLE</span>
             </div>
             <button id="btn-leave">[ 離開對話 ]</button>
         </div>
