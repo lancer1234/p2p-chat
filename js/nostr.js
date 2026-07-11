@@ -2,27 +2,30 @@ import { bytesToHex } from './crypto.js';
 
 export class NostrManager {
   constructor() {
+    // 🟢 汰換斷線的 snort，改用 2026 最穩定的四大核心骨幹節點
     this.relayUrls = [
       'wss://nos.lol',
-      'wss://relay.snort.social',
       'wss://relay.damus.io',
-      'wss://relay.primal.net'
+      'wss://relay.primal.net',
+      'wss://relay.nostr.band'
     ];
     this.activeRelays = [];
     this.activeSubs = {}; 
+    this.lastPublishTime = 0; // 💡 建立密碼學信號發射防護鎖
   }
 
   async connect() {
-    const connectionPromises = this.relayUrls.map(url => {
-      return new Promise((resolve) => {
+    const self = this;
+    const connectionPromises = this.relayUrls.map(function(url) {
+      return new Promise(function(resolve) {
         try {
           const relay = window.NostrTools.relayInit(url);
-          relay.on('connect', () => {
-            this.activeRelays.push(relay);
+          relay.on('connect', function() {
+            self.activeRelays.push(relay);
             resolve(true);
           });
-          relay.on('error', () => resolve(false));
-          relay.connect().catch(() => resolve(false));
+          relay.on('error', function() { resolve(false); });
+          relay.connect().catch(function() { resolve(false); });
         } catch(e) { resolve(false); }
       });
     });
@@ -30,11 +33,18 @@ export class NostrManager {
   }
 
   async sendEvent(mySk, friendPk, encryptedContent) {
-    const connectedRelays = this.activeRelays.filter(r => r.status === 1);
+    // 💡 【100% 落實保護】：限制中中繼站發射冷卻，防止高頻踩踏踩中 Rate Limit
+    const now = Date.now();
+    if (now - this.lastPublishTime < 4000) {
+        console.warn("🛡️ 觸發信號防護鎖：發射過於頻繁，就地實施防禦性丟棄。");
+        return;
+    }
+    this.lastPublishTime = now;
+
+    const connectedRelays = this.activeRelays.filter(function(r) { return r.status === 1; });
     if (connectedRelays.length === 0) return;
 
     try {
-      // 🟢 修正：完全阻斷對新舊版金鑰轉換 API 的依賴，相容二代結構
       const hexSk = typeof mySk === 'string' ? mySk : bytesToHex(mySk);
       const event = {
         kind: 4,
@@ -47,7 +57,7 @@ export class NostrManager {
       event.id = window.NostrTools.getEventHash(event);
       event.sig = window.NostrTools.getSignature(event, hexSk);
 
-      connectedRelays.forEach(relay => {
+      connectedRelays.forEach(function(relay) {
         try { relay.publish(event); } catch(err) {}
       });
     } catch (e) {
@@ -57,17 +67,19 @@ export class NostrManager {
 
   subscribeToFriend(myPk, friendPk, onMessageReceived) {
     this.unsubscribeFromFriend(friendPk);
-    const connectedRelays = this.activeRelays.filter(r => r.status === 1);
+    const connectedRelays = this.activeRelays.filter(function(r) { return r.status === 1; });
     if (connectedRelays.length === 0) return;
 
     const filter = { kinds: [4], '#p': [myPk] };
     if (friendPk !== 'any') filter.authors = [friendPk];
 
     const subsForThisFriend = [];
-    connectedRelays.forEach(relay => {
+    connectedRelays.forEach(function(relay) {
       try {
         const sub = relay.sub([filter]);
-        sub.on('event', (event) => onMessageReceived(event.content, event.pubkey));
+        sub.on('event', function(event) {
+          onMessageReceived(event.content, event.pubkey);
+        });
         subsForThisFriend.push(sub);
       } catch(e) {}
     });
@@ -77,7 +89,7 @@ export class NostrManager {
 
   unsubscribeFromFriend(friendPk) {
     if (this.activeSubs[friendPk]) {
-      this.activeSubs[friendPk].forEach(sub => {
+      this.activeSubs[friendPk].forEach(function(sub) {
         try { sub.unsub(); } catch(e) {}
       });
       delete this.activeSubs[friendPk];
@@ -85,6 +97,9 @@ export class NostrManager {
   }
 
   clearAllSubscriptions() {
-    Object.keys(this.activeSubs).forEach(friendPk => this.unsubscribeFromFriend(friendPk));
+    const self = this;
+    Object.keys(this.activeSubs).forEach(function(friendPk) {
+      self.unsubscribeFromFriend(friendPk);
+    });
   }
 }
