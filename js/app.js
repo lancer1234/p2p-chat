@@ -4,7 +4,6 @@ import { NostrManager } from './nostr.js';
 
 const GLOBAL_CHANNEL = 'any';
 
-// 💡 封裝獨立 Logger Class，拒絕污染 window 物件
 class SafeLogger {
     constructor(isProduction = false) {
         this.isProd = isProduction;
@@ -41,20 +40,19 @@ const rtcConfig = {
     ]
 };
 
-// 💡 弱口令防禦清單
 function isWeakPassword(pin) {
     const weakPatterns = ["12345678", "00000000", "11111111", "88888888", "password"];
     return pin.length < 8 || weakPatterns.includes(pin.toLowerCase());
 }
 
-// 💡 封裝信號邊界 Schema 校驗
 function isValidSignalingSchema(data) {
     if (!data || typeof data !== 'object') return false;
     const validTypes = ['init-offer', 'init-answer', 'reconnect-offer', 'reconnect-answer'];
     return validTypes.includes(data.type) && data.sdp;
 }
 
-document.getElementById('btn-unlock').addEventListener('click', async () => {
+// 🔓 綁定解鎖與初始化按鈕
+document.getElementById('btn-unlock').addEventListener('click', async function() {
     const pinInput = document.getElementById('input-pin').value;
     if (isWeakPassword(pinInput)) {
         alert("安全強度不足！密碼長度必須大於等於 8 位，且禁止使用連續或單一重複數字。");
@@ -86,7 +84,7 @@ document.getElementById('btn-unlock').addEventListener('click', async () => {
 });
 
 function bootstrapApp() {
-    nostr.connect().then(() => {
+    nostr.connect().then(function() {
         isNostrReady = true;
         const savedLastPk = Storage.getLastChatPk();
         if (savedLastPk && !isGeneratingQR && !isScanningQR) {
@@ -97,8 +95,10 @@ function bootstrapApp() {
             updateOnlineStatus(false);
             listenForMessages(currentFriendPk);
             
-            setTimeout(() => {
-                if (!isGeneratingQR && !isScanningQR && isInChatMode) triggerNostrReconnect();
+            setTimeout(function() {
+                if (!isGeneratingQR && !isScanningQR && isInChatMode) {
+                    triggerNostrReconnect();
+                }
             }, 1500);
         }
     });
@@ -109,7 +109,7 @@ document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 document.getElementById('btn-send').addEventListener('click', sendMessage);
 document.getElementById('btn-leave').addEventListener('click', leaveChat);
 
-document.getElementById('input-msg').addEventListener('keydown', (e) => {
+document.getElementById('input-msg').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') sendMessage();
 });
 
@@ -140,6 +140,51 @@ function clearSessionState() {
     document.getElementById('setup-container').style.display = 'block';
 }
 
+// 💡 抽離信號處理函數，杜絕巢狀結構造成的編譯錯誤
+async function handleIncomingInitiatorSignal(rawContent, authorPk) {
+    if (rawContent.length > 50000 || !isGeneratingQR || isInChatMode || !authorPk) return;
+    if (p2pPeer && p2pPeer.connected) return;
+
+    try {
+        let data = null;
+        try {
+            data = JSON.parse(rawContent);
+        } catch (jsonErr) {
+            try {
+                const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, rawContent);
+                if (decryptedText) data = JSON.parse(decryptedText);
+            } catch (cryptoErr) { 
+                return; 
+            }
+        }
+
+        if (!isValidSignalingSchema(data) || data.type !== 'init-offer') return;
+
+        isGeneratingQR = false; 
+        if (initTimer) clearInterval(initTimer);
+        nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
+
+        currentFriendPk = authorPk;
+        localStorage.setItem('last_chat_pk', currentFriendPk);
+        forceDestroyPeer();
+        
+        p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
+        setupPeerEvents(); 
+        p2pPeer.signal(data.sdp);
+
+        p2pPeer.on('signal', async function(webrtcAnswer) {
+            const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
+            await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
+        });
+
+        Storage.saveFriend(currentFriendPk);
+        isInChatMode = true;
+        showChatInterface();
+        restoreChatLogs();
+        listenForMessages(currentFriendPk);
+    } catch (e) {}
+}
+
 function startAsInitiator() {
     clearSessionState();
     isGeneratingQR = true;  
@@ -154,58 +199,20 @@ function startAsInitiator() {
     qr.make();
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
-    const initSub = () => {
-        if (!isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected)) return;
+    const runSubscription = function() {
+        if (!isGeneratingQR || isInChatMode) return;
+        if (p2pPeer && p2pPeer.connected) return;
         logger.debug("📡 正在等待對方發射協議 Offer...");
-        
-        nostr.subscribeToFriend(myKeyPair.pk, GLOBAL_CHANNEL, async (rawContent, authorPk) => {
-            try {
-                // 💡 安全防禦：輸入長度過濾
-                if (rawContent.length > 50000 || !isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected) || !authorPk) return;
-                
-                let data = null;
-                try {
-                    data = JSON.parse(rawContent);
-                } catch (jsonErr) {
-                    try {
-                        const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, rawContent);
-                        if (decryptedText) data = JSON.parse(decryptedText);
-                    } catch (cryptoErr) { return; }
-                }
-
-                // 💡 安全防禦：強 Schema 校驗
-                if (!isValidSignalingSchema(data) || data.type !== 'init-offer') return;
-
-                isGeneratingQR = false; 
-                if (initTimer) clearInterval(initTimer);
-                nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
-
-                currentFriendPk = authorPk;
-                localStorage.setItem('last_chat_pk', currentFriendPk);
-                forceDestroyPeer();
-                
-                p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
-                setupPeerEvents(); 
-                p2pPeer.signal(data.sdp);
-
-                p2pPeer.on('signal', async (webrtcAnswer) => {
-                    const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
-                    await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
-                });
-
-                Storage.saveFriend(currentFriendPk);
-                isInChatMode = true;
-                showChatInterface();
-                restoreChatLogs();
-                listenForMessages(currentFriendPk);
-            } catch (e) {}
-        });
+        nostr.subscribeToFriend(myKeyPair.pk, GLOBAL_CHANNEL, handleIncomingInitiatorSignal);
     };
 
-    initSub();
-    initTimer = setInterval(() => {
-        if (isGeneratingQR && !isInChatMode && (!p2pPeer || !p2pPeer.connected)) initSub();
-        else clearInterval(initTimer);
+    runSubscription();
+    initTimer = setInterval(function() {
+        if (isGeneratingQR && !isInChatMode) {
+            runSubscription();
+        } else {
+            clearInterval(initTimer);
+        }
     }, 5000);
 }
 
@@ -220,7 +227,7 @@ function startCameraScan() {
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
     html5QrcodeScanner.start(
         { facingMode: "environment" }, { fps: 20, qrbox: 250 }, 
-        async (decodedFriendPk) => {
+        async function(decodedFriendPk) {
             try { await html5QrcodeScanner.stop(); } catch (err) {}
             document.getElementById('reader').style.display = 'none';
             
@@ -235,7 +242,7 @@ function startCameraScan() {
             p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
             setupPeerEvents();
             
-            p2pPeer.on('signal', async (webrtcOffer) => {
+            p2pPeer.on('signal', async function(webrtcOffer) {
                 const offerPackage = { type: 'init-offer', sdp: webrtcOffer };
                 await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
             });
@@ -243,13 +250,15 @@ function startCameraScan() {
             Storage.saveFriend(currentFriendPk);
             listenForMessages(currentFriendPk);
         },
-        () => {}
-    ).catch((err) => { logger.debug(`❌ 相機失敗: ${err.message}`); });
+        function() {}
+    ).catch(function(err) { 
+        logger.debug(`❌ 相機失敗: ${err.message}`); 
+    });
 }
 
 function listenForMessages(friendPk) {
     if (!friendPk) return;
-    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
+    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async function(rawContent, authorPk) {
         try {
             if (rawContent.length > 50000 || isGeneratingQR || isScanningQR) return;
             const senderPk = authorPk || friendPk;
@@ -261,12 +270,12 @@ function listenForMessages(friendPk) {
                 try {
                     const decryptedText = await Crypto.decryptData(myKeyPair.sk, senderPk, rawContent);
                     if (decryptedText) data = JSON.parse(decryptedText);
-                } catch (cryptoErr) { return; }
+                } catch (cryptoErr) { 
+                    return; 
+                }
             }
             
-            // 💡 安全防禦：Schema 校驗
             if (!isValidSignalingSchema(data)) return;
-
             if (!isInChatMode) return;
 
             if (data.type === 'init-answer') {
@@ -278,7 +287,7 @@ function listenForMessages(friendPk) {
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
 
-                p2pPeer.on('signal', async (myNewAnswer) => {
+                p2pPeer.on('signal', async function(myNewAnswer) {
                     const reconnectAnswer = { type: 'reconnect-answer', sdp: myNewAnswer };
                     const encAnswer = await Crypto.encryptData(myKeyPair.sk, senderPk, JSON.stringify(reconnectAnswer));
                     await nostr.sendEvent(myKeyPair.sk, senderPk, encAnswer);
@@ -320,7 +329,9 @@ function restoreChatLogs() {
     if (!box) return;
     box.innerHTML = '';
     const logs = Storage.getMessageLogs(currentFriendPk);
-    logs.forEach(log => appendMessage(log.text, log.sender));
+    logs.forEach(function(log) {
+        appendMessage(log.text, log.sender);
+    });
     if (logs.length === 0) {
         box.innerHTML = `<div class="msg system">加密信道已就緒，等待背景協議對接...</div>`;
     }
@@ -372,24 +383,33 @@ async function leaveChat() {
 function setupPeerEvents() {
     if (!p2pPeer) return;
 
-    p2pPeer.on('connect', () => {
+    p2pPeer.on('connect', function() {
         logger.debug("⚡ [WebRTC] P2P 直連管道建立成功。");
         updateOnlineStatus(true);
     });
 
-    p2pPeer.on('data', (data) => {
+    p2pPeer.on('data', function(data) {
         const text = data.toString();
         Storage.saveMessageLog(currentFriendPk, text, 'friend');
         appendMessage(text, 'friend');
     });
 
-    p2pPeer.on('close', () => { isReconnecting = false; updateOnlineStatus(false); });
-    p2pPeer.on('error', (err) => { isReconnecting = false; updateOnlineStatus(false); });
+    p2pPeer.on('close', function() { 
+        isReconnecting = false; 
+        updateOnlineStatus(false); 
+    });
+    p2pPeer.on('error', function(err) { 
+        isReconnecting = false; 
+        updateOnlineStatus(false); 
+    });
 }
 
 async function triggerNostrReconnect() {
     if (isGeneratingQR || isScanningQR || !isInChatMode || !currentFriendPk || !isNostrReady || isReconnecting) return;
-    if (p2pPeer && p2pPeer.connected) { updateOnlineStatus(true); return; }
+    if (p2pPeer && p2pPeer.connected) { 
+        updateOnlineStatus(true); 
+        return; 
+    }
 
     isReconnecting = true; 
     updateOnlineStatus(false);
@@ -401,7 +421,7 @@ async function triggerNostrReconnect() {
         p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
         setupPeerEvents(); 
 
-        p2pPeer.on('signal', async (newWebrtcData) => {
+        p2pPeer.on('signal', async function(newWebrtcData) {
             if (isGeneratingQR || isScanningQR || !currentFriendPk || !isInChatMode) return;
             const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
             const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
@@ -410,11 +430,13 @@ async function triggerNostrReconnect() {
     } else {
         p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
         setupPeerEvents();
-        setTimeout(() => { isReconnecting = false; }, 8000);
+        setTimeout(function() { 
+            isReconnecting = false; 
+        }, 8000);
     }
 }
 
-setInterval(() => {
+setInterval(function() {
     if (!isGeneratingQR && !isScanningQR && isInChatMode && currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
         triggerNostrReconnect();
     }
