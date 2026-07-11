@@ -1,6 +1,7 @@
-// 🟢 自建純原生 Hex Helpers，杜絕任何外部版本(v1/v2)斷代及導出遺失的問題
 export function bytesToHex(bytes) {
-  return [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+  return [...bytes].map(function(b) {
+    return b.toString(16).padStart(2, "0");
+  }).join("");
 }
 
 export function hexToBytes(hex) {
@@ -67,19 +68,15 @@ export const Crypto = {
     combined.set(iv, salt.length);
     combined.set(new Uint8Array(encrypted), salt.length + iv.length);
     
-    // 🟢 修正：使用自建 Helper
     return bytesToHex(combined);
   },
 
   async decryptSecret(cipherTextHex, pin) {
-    // 🟢 修正：增加第一線防護，防止空快取直接崩潰
     if (!cipherTextHex) {
         throw new Error("找不到任何已存的身分私鑰密文包。");
     }
 
-    // 🟢 修正：使用自建 Helper
     const combined = hexToBytes(cipherTextHex);
-    
     if (combined.length < 29) {
         throw new Error("INVALID_FORMAT: 檢測到舊格式明文快取，請執行清除快取指令。");
     }
