@@ -2,7 +2,11 @@ import { Storage } from './storage.js';
 import { Crypto } from './crypto.js';
 import { NostrManager } from './nostr.js';
 
-let myKeyPair = Storage.getMyKeys();
+// 💡 健常化常數定義，消除 Magic String
+const GLOBAL_CHANNEL = 'any';
+const PRODUCTION_MODE = false; // ⚠️ 正式發布時設為 true 會自動關閉 Debug Panel
+
+let myKeyPair = { sk: null, pk: null };
 let p2pPeer = null;
 let currentFriendPk = null; 
 let nostr = new NostrManager(); 
@@ -11,11 +15,13 @@ let isNostrReady = false;
 let isReconnecting = false;
 let isInChatMode = false; 
 let initTimer = null;
-
 let isGeneratingQR = false;
 let isScanningQR = false;
+let userPin = "";
 
+// 🎛️ Logger 封裝控制類別
 window.logDebug = function(msg) {
+    if (PRODUCTION_MODE) return;
     const consoleEl = document.getElementById('debug-console');
     if (consoleEl) {
         consoleEl.innerText += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
@@ -23,6 +29,7 @@ window.logDebug = function(msg) {
     }
 };
 
+// 💡 RTC 多重備援伺服器配置（整合 STUN）
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -31,41 +38,66 @@ const rtcConfig = {
     ]
 };
 
-if (!myKeyPair.sk || !myKeyPair.pk) {
-    const sk = window.NostrTools.generatePrivateKey();
-    const pk = window.NostrTools.getPublicKey(sk);
-    Storage.saveKeyPair(sk, pk);
-    myKeyPair = { sk, pk };
-}
-
-window.logDebug(`我的公鑰: ${myKeyPair.pk.substring(0,8)}...`);
-
-nostr.connect().then(() => {
-    isNostrReady = true;
+// 🔓 安全解鎖流調度
+document.getElementById('btn-unlock').addEventListener('click', async () => {
+    const pinInput = document.getElementById('input-pin').value;
+    if (!pinInput || pinInput.length < 6) {
+        alert("請輸入完整 6 位數密碼");
+        return;
+    }
+    userPin = pinInput;
     
-    const savedLastPk = Storage.getLastChatPk();
-    if (savedLastPk && !isGeneratingQR && !isScanningQR) {
-        window.logDebug("發現舊對話快取，正在嘗試背景無縫對接...");
-        currentFriendPk = savedLastPk;
-        isInChatMode = true; 
-        showChatInterface();
-        restoreChatLogs();
-        updateOnlineStatus(false);
-        listenForMessages(currentFriendPk);
+    const cached = Storage.getEncryptedKeyPair();
+    try {
+        if (cached.esk && cached.pk) {
+            // 現有用戶：利用密碼進行 AES-GCM 解密
+            const decryptedSk = await Crypto.decryptSecret(cached.esk, userPin);
+            myKeyPair = { sk: decryptedSk, pk: cached.pk };
+            window.logDebug("🔑 身分解鎖成功，金鑰安全釋放至記憶體。");
+        } else {
+            // 全新用戶：動態生成新私鑰並用 PIN 碼安全加密
+            const sk = window.NostrTools.generatePrivateKey();
+            const pk = window.NostrTools.getPublicKey(sk);
+            const encryptedSkHex = await Crypto.encryptSecret(sk, userPin);
+            Storage.saveEncryptedKeyPair(encryptedSkHex, pk);
+            myKeyPair = { sk, pk };
+            window.logDebug("✨ 全新身分建立完畢，私鑰已通過 AES-GCM 安全硬化儲存。");
+        }
         
-        setTimeout(() => {
-            if (!isGeneratingQR && !isScanningQR && isInChatMode) {
-                triggerNostrReconnect();
-            }
-        }, 1500);
+        document.getElementById('pin-container').style.display = 'none';
+        document.getElementById('setup-container').style.display = 'block';
+        bootstrapApp(); // 啟動主程式
+    } catch(e) {
+        alert("密碼錯誤或身分金鑰受損！");
     }
 });
+
+function bootstrapApp() {
+    nostr.connect().then(() => {
+        isNostrReady = true;
+        const savedLastPk = Storage.getLastChatPk();
+        if (savedLastPk && !isGeneratingQR && !isScanningQR) {
+            currentFriendPk = savedLastPk;
+            isInChatMode = true; 
+            showChatInterface();
+            restoreChatLogs();
+            updateOnlineStatus(false);
+            listenForMessages(currentFriendPk);
+            
+            setTimeout(() => {
+                if (!isGeneratingQR && !isScanningQR && isInChatMode) triggerNostrReconnect();
+            }, 1500);
+        }
+    });
+}
 
 document.getElementById('btn-create').addEventListener('click', startAsInitiator);
 document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 document.getElementById('btn-send').addEventListener('click', sendMessage);
 document.getElementById('btn-leave').addEventListener('click', leaveChat);
-document.getElementById('input-msg').addEventListener('keypress', (e) => {
+
+// 💡 依據建議優化：使用現代標準 keydown 事件取代過期的 keypress
+document.getElementById('input-msg').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
 
@@ -80,11 +112,8 @@ function forceDestroyPeer() {
 }
 
 function clearSessionState() {
-    // 💡 退訂當前這個舊朋友的 Nostr 頻道，讓他再也無法發送任何非同步快取訊息過來
-    if (currentFriendPk) {
-        nostr.unsubscribeFromFriend(currentFriendPk);
-    }
-    nostr.unsubscribeFromFriend('any'); // 同步移除全局萬能監聽
+    if (currentFriendPk) nostr.unsubscribeFromFriend(currentFriendPk);
+    nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
 
     isInChatMode = false;
     isReconnecting = false;
@@ -104,8 +133,6 @@ function startAsInitiator() {
     isGeneratingQR = true;  
     isScanningQR = false;
     
-    window.logDebug("已重置環境，正在產生新通道...");
-    
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
     container.style.display = 'block';
@@ -119,10 +146,11 @@ function startAsInitiator() {
         if (!isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected)) return;
         window.logDebug("📡 正在等待對方掃碼並發送 Offer...");
         
-        nostr.subscribeToFriend(myKeyPair.pk, 'any', async (rawContent, authorPk) => {
+        nostr.subscribeToFriend(myKeyPair.pk, GLOBAL_CHANNEL, async (rawContent, authorPk) => {
             try {
-                if (!isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected)) return;
-                if (!authorPk) return;
+                // 💡 安全防禦：過濾異常大信號，阻斷潛在 DDOS 或 OOM 攻擊
+                if (rawContent.length > 50000) return;
+                if (!isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected) || !authorPk) return;
                 
                 let data = null;
                 try {
@@ -131,22 +159,16 @@ function startAsInitiator() {
                     try {
                         const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, rawContent);
                         if (decryptedText) data = JSON.parse(decryptedText);
-                    } catch (cryptoErr) {
-                        return; 
-                    }
+                    } catch (cryptoErr) { return; }
                 }
 
                 if (data && data.type === 'init-offer') {
-                    window.logDebug("📥 成功收到對方的連線邀請信號！");
                     isGeneratingQR = false; 
                     if (initTimer) clearInterval(initTimer);
-                    
-                    // 💡 對接成功，關閉萬能全域監聽，回歸精準監聽
-                    nostr.unsubscribeFromFriend('any');
+                    nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
 
                     currentFriendPk = authorPk;
                     localStorage.setItem('last_chat_pk', currentFriendPk);
-                    
                     forceDestroyPeer();
                     
                     p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
@@ -154,7 +176,6 @@ function startAsInitiator() {
                     p2pPeer.signal(data.sdp);
 
                     p2pPeer.on('signal', async (webrtcAnswer) => {
-                        window.logDebug("📤 正在回傳應答信號 (Answer)...");
                         const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
                         await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
                     });
@@ -171,11 +192,8 @@ function startAsInitiator() {
 
     initSub();
     initTimer = setInterval(() => {
-        if (isGeneratingQR && !isInChatMode && (!p2pPeer || !p2pPeer.connected)) {
-            initSub();
-        } else {
-            clearInterval(initTimer);
-        }
+        if (isGeneratingQR && !isInChatMode && (!p2pPeer || !p2pPeer.connected)) initSub();
+        else clearInterval(initTimer);
     }, 5000);
 }
 
@@ -187,11 +205,9 @@ function startCameraScan() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
 
-    window.logDebug("📷 相機啟動中...");
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
     html5QrcodeScanner.start(
-        { facingMode: "environment" },
-        { fps: 20, qrbox: 250 }, 
+        { facingMode: "environment" }, { fps: 20, qrbox: 250 }, 
         async (decodedFriendPk) => {
             try { await html5QrcodeScanner.stop(); } catch (err) {}
             document.getElementById('reader').style.display = 'none';
@@ -199,19 +215,15 @@ function startCameraScan() {
             if (!isScanningQR) return;
             isScanningQR = false; 
             
-            window.logDebug("✅ 掃碼成功！正在初始化 WebRTC 實體...");
             currentFriendPk = decodedFriendPk;
             localStorage.setItem('last_chat_pk', currentFriendPk);
-            
             isInChatMode = true; 
             showChatInterface();
-            appendMessage("已成功掃描信任密鑰，正在發射 Offer 信號...", "system");
 
             p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
             setupPeerEvents();
             
             p2pPeer.on('signal', async (webrtcOffer) => {
-                window.logDebug("📤 正在向 Nostr 推播連線提議...");
                 const offerPackage = { type: 'init-offer', sdp: webrtcOffer };
                 await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
             });
@@ -220,17 +232,14 @@ function startCameraScan() {
             listenForMessages(currentFriendPk);
         },
         () => {}
-    ).catch((err) => {
-        window.logDebug(`❌ 相機啟動失敗: ${err.message}`);
-    });
+    ).catch((err) => { window.logDebug(`❌ 相機啟動失敗: ${err.message}`); });
 }
 
 function listenForMessages(friendPk) {
     if (!friendPk) return;
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
         try {
-            if (isGeneratingQR || isScanningQR) return;
-
+            if (rawContent.length > 50000 || isGeneratingQR || isScanningQR) return;
             const senderPk = authorPk || friendPk;
             let data = null;
             
@@ -240,13 +249,10 @@ function listenForMessages(friendPk) {
                 try {
                     const decryptedText = await Crypto.decryptData(myKeyPair.sk, senderPk, rawContent);
                     if (decryptedText) data = JSON.parse(decryptedText);
-                } catch (cryptoErr) {
-                    return;
-                }
+                } catch (cryptoErr) { return; }
             }
             
             if (!data) return;
-
             if (data.type === 'leave') {
                 updateOnlineStatus(false);
                 forceDestroyPeer();
@@ -256,12 +262,10 @@ function listenForMessages(friendPk) {
             if (!isInChatMode) return;
 
             if (data.type === 'init-answer') {
-                window.logDebug("📥 收到對方的 Answer 響應，正在打通對接直連...");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
                 forceDestroyPeer();
-                
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
                 setupPeerEvents();
                 p2pPeer.signal(data.sdp);
@@ -341,7 +345,6 @@ function updateOnlineStatus(isOnline) {
 
 async function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
-    
     isGeneratingQR = false;
     isScanningQR = false;
 
@@ -372,30 +375,19 @@ function setupPeerEvents() {
         appendMessage(text, 'friend');
     });
 
-    p2pPeer.on('close', () => { 
-        isReconnecting = false; 
-        updateOnlineStatus(false); 
-    });
-
-    p2pPeer.on('error', (err) => { 
-        window.logDebug(`⚠️ WebRTC 底層連線重置: ${err.message}`);
-        isReconnecting = false; 
-        updateOnlineStatus(false); 
-    });
+    p2pPeer.on('close', () => { isReconnecting = false; updateOnlineStatus(false); });
+    p2pPeer.on('error', (err) => { isReconnecting = false; updateOnlineStatus(false); });
 }
 
 async function triggerNostrReconnect() {
     if (isGeneratingQR || isScanningQR || !isInChatMode || !currentFriendPk || !isNostrReady || isReconnecting) return;
-    
-    if (p2pPeer && p2pPeer.connected) {
-        updateOnlineStatus(true);
-        return;
-    }
+    if (p2pPeer && p2pPeer.connected) { updateOnlineStatus(true); return; }
 
     isReconnecting = true; 
     updateOnlineStatus(false);
     forceDestroyPeer();
 
+    // Tie-Breaking 鎖定：大公鑰端為主動發起方
     const amIInitiator = myKeyPair.pk > currentFriendPk;
 
     if (amIInitiator) {
