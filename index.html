@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>📟 P2P Chat</title>
+    <!-- 補強 CSP 安全網：杜絕 XSS 惡意腳本外洩資料 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://nos.lol wss://relay.snort.social wss://relay.damus.io wss://relay.primal.net stun:stun.l.google.com:19302 stun:stun1.l.google.com:19302 stun:stun.services.mozilla.com; img-src 'self' data:;">
+    <title>📟 P2P Chat Professional</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
     <script src="https://unpkg.com/nostr-tools@1.17.0/lib/nostr.bundle.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.5.0/lz-string.min.js"></script>
     
     <style>
         :root {
@@ -36,13 +37,18 @@
             overflow: hidden; 
         }
         
+        /* PIN 碼安全鎖定介面 */
+        #pin-container {
+            width: 100%; max-width: 360px; padding: 24px; text-align: center; z-index: 200;
+        }
+        .pin-input {
+            width: 100%; background: var(--panel); border: 1px solid var(--border);
+            padding: 16px; color: #FFF; font-size: 1.2rem; text-align: center;
+            border-radius: 8px; letter-spacing: 0.5em; margin: 20px 0;
+        }
+
         #setup-container { 
-            width: 100%; 
-            max-width: 360px; 
-            padding: 24px; 
-            text-align: center; 
-            z-index: 5; 
-            position: relative;
+            display: none; width: 100%; max-width: 360px; padding: 24px; text-align: center; z-index: 5; 
         }
         h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.025em; margin: 0 0 8px 0; color: #FFF; }
         .subtitle { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 36px; }
@@ -50,49 +56,35 @@
         .btn-group { display: flex; flex-direction: column; gap: 12px; }
         
         button { 
-            background: var(--panel); 
-            color: var(--text); 
-            border: 1px solid var(--border); 
-            padding: 16px; 
-            border-radius: 8px; 
-            font-size: 0.95rem; 
-            font-weight: 500; 
-            cursor: pointer; 
-            width: 100%; 
-            position: relative;
-            z-index: 10;
-            transition: background 0.1s;
+            background: var(--panel); color: var(--text); border: 1px solid var(--border); 
+            padding: 16px; border-radius: 8px; font-size: 0.95rem; font-weight: 500; 
+            cursor: pointer; width: 100%; transition: background 0.1s;
         }
         button:active { background: var(--border); }
         #btn-create { border-color: rgba(0, 255, 204, 0.4); color: var(--accent); }
         
-        #reader { width: 100%; max-width: 320px; margin: 20px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: none; position: relative; z-index: 6; }
-        
-        #qrcode-container { margin: 20px auto; width: 85vw; max-width: 340px; background: #FFF; padding: 24px; border-radius: 16px; display: none; box-shadow: 0 20px 40px rgba(0,0,0,0.6); text-align: center; position: relative; z-index: 6; }
+        #reader { width: 100%; max-width: 320px; margin: 20px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: none; }
+        #qrcode-container { margin: 20px auto; width: 85vw; max-width: 340px; background: #FFF; padding: 24px; border-radius: 16px; display: none; box-shadow: 0 20px 40px rgba(0,0,0,0.6); text-align: center; }
         #qrcode-container h3 { color: #0A0A0C; font-size: 0.85rem; font-weight: 600; margin: 0 0 16px 0; }
         #qrcode-container img { width: 100% !important; height: auto !important; display: block; image-rendering: pixelated; }
 
+        #debug-console {
+            width: 100%; max-width: 360px; height: 120px; background: #000; border: 1px solid #333;
+            border-radius: 6px; font-family: monospace; font-size: 11px; color: #888;
+            padding: 8px; overflow-y: auto; text-align: left; margin-top: 20px; white-space: pre-wrap;
+        }
+
         #chat-interface { 
-            display: none; 
-            width: 100%; 
-            max-width: 600px; 
-            height: 100dvh; 
-            background: var(--bg); 
-            flex-direction: column; 
-            position: fixed; 
-            top: 0; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            z-index: 100; 
+            display: none; width: 100%; max-width: 600px; height: 100dvh; background: var(--bg); 
+            flex-direction: column; position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 100; 
         }
         
         #chat-header { height: 56px; border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; justify-content: space-between; background: var(--bg); }
-        
         .status-container { display: flex; align-items: center; gap: 8px; }
         #status-text { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em; }
         #status-dot { width: 6px; height: 6px; background: var(--text-muted); border-radius: 50%; transition: all 0.3s; }
         
-        #btn-leave { font-size: 0.8rem; color: var(--text-muted); cursor: pointer; background: transparent; border: none; width: auto; padding: 4px 8px; transition: color 0.2s; }
+        #btn-leave { font-size: 0.8rem; color: var(--text-muted); cursor: pointer; background: transparent; border: none; width: auto; padding: 4px 8px; }
         #btn-leave:hover { color: var(--danger); }
         
         #chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; background: var(--bg); }
@@ -109,6 +101,14 @@
 </head>
 <body>
 
+    <!-- 新增的安全驗證層：防禦明文私鑰被竊 -->
+    <div id="pin-container">
+        <h1>🔐 身分驗證安全鎖</h1>
+        <div class="subtitle" id="pin-tip">請設定 6 位數密碼以防禦 XSS 竊取私鑰</div>
+        <input type="password" id="input-pin" class="pin-input" maxlength="6" placeholder="******" pattern="\d*">
+        <button id="btn-unlock">確認解鎖 / 初始化身份</button>
+    </div>
+
     <div id="setup-container">
         <h1>📟 P2P Chat</h1>
         <div class="subtitle">去中心化・本地端對端加密通訊</div>
@@ -116,6 +116,7 @@
             <button id="btn-create">1. 產生邀請 QR Code</button>
             <button id="btn-scan">2. 掃描對方 QR Code</button>
         </div>
+        <div id="debug-console">系統初始化中...</div>
     </div>
     
     <div id="qrcode-container"></div>
