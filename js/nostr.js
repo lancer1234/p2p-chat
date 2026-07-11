@@ -1,5 +1,4 @@
 export class NostrManager {
-  // 💡 多重 Relay 池化備援：防範單點中繼站掛點導致服務停擺
   constructor() {
     this.relayUrls = [
       'wss://nos.lol',
@@ -14,22 +13,19 @@ export class NostrManager {
   async connect() {
     const connectionPromises = this.relayUrls.map(url => {
       return new Promise((resolve) => {
-        const relay = window.NostrTools.relayInit(url);
-        relay.on('connect', () => {
-          console.log(`🌐 信令通道併發接通: ${url}`);
-          this.activeRelays.push(relay);
-          resolve(true);
-        });
-        relay.on('error', () => resolve(false));
-        relay.connect().catch(() => resolve(false));
+        try {
+          const relay = window.NostrTools.relayInit(url);
+          relay.on('connect', () => {
+            this.activeRelays.push(relay);
+            resolve(true);
+          });
+          relay.on('error', () => resolve(false));
+          relay.connect().catch(() => resolve(false));
+        } catch(e) { resolve(false); }
       });
     });
 
-    // 只要有任何一個 Relay 連上，引路人機制就成功啟動
-    const results = await Promise.all(connectionPromises);
-    if (!results.some(r => r) && window.logDebug) {
-      window.logDebug("❌ 全球信令矩陣連線失敗，請檢查網路環境");
-    }
+    await Promise.all(connectionPromises);
   }
 
   async sendEvent(mySk, friendPk, encryptedContent) {
@@ -49,18 +45,16 @@ export class NostrManager {
       event.id = window.NostrTools.getEventHash(event);
       event.sig = window.NostrTools.getSignature(event, hexSk);
 
-      // 同步推播到所有存活的備援節點
       connectedRelays.forEach(relay => {
-        relay.publish(event).catch(()=>{});
+        try { relay.publish(event); } catch(err) {}
       });
     } catch (e) {
-      console.error("信號擴散失敗", e);
+      console.error("廣播失敗", e);
     }
   }
 
   subscribeToFriend(myPk, friendPk, onMessageReceived) {
     this.unsubscribeFromFriend(friendPk);
-
     const connectedRelays = this.activeRelays.filter(r => r.status === 1);
     if (connectedRelays.length === 0) return;
 
@@ -68,7 +62,6 @@ export class NostrManager {
     if (friendPk !== 'any') filter.authors = [friendPk];
 
     const subsForThisFriend = [];
-
     connectedRelays.forEach(relay => {
       try {
         const sub = relay.sub([filter]);
@@ -86,7 +79,6 @@ export class NostrManager {
         try { sub.unsub(); } catch(e) {}
       });
       delete this.activeSubs[friendPk];
-      console.log(`🧹 物理退訂成功: ${friendPk.substring(0,8)}...`);
     }
   }
 
