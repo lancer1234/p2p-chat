@@ -1,41 +1,59 @@
 export const Crypto = {
-  // 💡 優化：動態衍生 Key 機制，支援傳入自訂隨機鹽值，並將疊代提升至 500,000 次以抗衡 2026 算力標準
+  // 🟢 徹底平鋪引數物件宣告，解決 Safari 的 Unexpected token '{' 解析臭蟲
   async deriveKeyFromPin(pin, saltBytes) {
     const encoder = new TextEncoder();
     const pinBytes = encoder.encode(pin);
     
+    // 1. 將 importKey 的配置抽離成靜態常數變數
+    const importFormat = "raw";
+    const importAlgorithm = { name: "PBKDF2" };
+    const extractable = false;
+    const keyUsagesForDerive = ["deriveKey"];
+
     const baseKey = await crypto.subtle.importKey(
-      "raw", pinBytes, { name: "PBKDF2" }, false, ["deriveKey"]
+      importFormat,
+      pinBytes,
+      importAlgorithm,
+      extractable,
+      keyUsagesForDerive
     );
     
+    // 2. 將 deriveKey 的配置完全打散抽離
+    const deriveAlgorithm = {
+      name: "PBKDF2",
+      salt: saltBytes,
+      iterations: 500000,
+      hash: "SHA-256"
+    };
+    const targetKeyAlgorithm = { name: "AES-GCM", length: 256 };
+    const targetKeyUsages = ["encrypt", "decrypt"];
+
     return await crypto.subtle.deriveKey(
-      {
-        name: "PBKDF2",
-        salt: saltBytes,
-        iterations: 500000, // 💡 提升至 50 萬次防禦
-        hash: "SHA-256"
-      },
+      deriveAlgorithm,
       baseKey,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt", "decrypt"]
+      targetKeyAlgorithm,
+      extractable,
+      targetKeyUsages
     );
   },
 
-  // 💡 升級：隨機 Salt + 隨機 IV 的完整密碼學防禦封包
   async encryptSecret(plainText, pin) {
     const encoder = new TextEncoder();
-    const salt = crypto.getRandomValues(new Uint8Array(16)); // 💡 16 節節隨機鹽值
-    const iv = crypto.getRandomValues(new Uint8Array(12));   // 12 節節隨機隨機 IV
+    const salt = crypto.getRandomValues(new Uint8Array(16)); 
+    const iv = crypto.getRandomValues(new Uint8Array(12));   
     
     const cryptoKey = await this.deriveKeyFromPin(pin, salt);
+    
+    // 抽離 AES-GCM 配置引數物件
+    const encryptAlgorithm = { name: "AES-GCM", iv: iv };
+    const plainBytes = encoder.encode(plainText);
+
     const encrypted = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv: iv },
+      encryptAlgorithm,
       cryptoKey,
-      encoder.encode(plainText)
+      plainBytes
     );
     
-    // 包裝結構: [16 bytes Salt] + [12 bytes IV] + [Ciphertext]
     const combined = new Uint8Array(salt.length + iv.length + encrypted.byteLength);
     combined.set(salt, 0);
     combined.set(iv, salt.length);
@@ -53,8 +71,12 @@ export const Crypto = {
     const encryptedData = combined.slice(28);
     
     const cryptoKey = await this.deriveKeyFromPin(pin, salt);
+    
+    // 抽離 AES-GCM 配置引數物件
+    const decryptAlgorithm = { name: "AES-GCM", iv: iv };
+
     const decrypted = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: iv },
+      decryptAlgorithm,
       cryptoKey,
       encryptedData
     );
