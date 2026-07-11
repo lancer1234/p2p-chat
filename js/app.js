@@ -12,7 +12,6 @@ let isReconnecting = false;
 let isInChatMode = false; 
 let initTimer = null;
 
-// 💡 核心防禦鎖：防止非同步舊信號在準備連線時強行篡改介面
 let isGeneratingQR = false;
 let isScanningQR = false;
 
@@ -44,7 +43,6 @@ window.logDebug(`我的公鑰: ${myKeyPair.pk.substring(0,8)}...`);
 nostr.connect().then(() => {
     isNostrReady = true;
     
-    // 初始化時，如果使用者還沒點擊任何按鈕，才允許載入舊快取
     const savedLastPk = Storage.getLastChatPk();
     if (savedLastPk && !isGeneratingQR && !isScanningQR) {
         window.logDebug("發現舊對話快取，正在嘗試背景無縫對接...");
@@ -56,7 +54,7 @@ nostr.connect().then(() => {
         listenForMessages(currentFriendPk);
         
         setTimeout(() => {
-            if (!isGeneratingQR && !isScanningQR) {
+            if (!isGeneratingQR && !isScanningQR && isInChatMode) {
                 triggerNostrReconnect();
             }
         }, 1500);
@@ -82,13 +80,18 @@ function forceDestroyPeer() {
 }
 
 function clearSessionState() {
+    // 💡 退訂當前這個舊朋友的 Nostr 頻道，讓他再也無法發送任何非同步快取訊息過來
+    if (currentFriendPk) {
+        nostr.unsubscribeFromFriend(currentFriendPk);
+    }
+    nostr.unsubscribeFromFriend('any'); // 同步移除全局萬能監聽
+
     isInChatMode = false;
     isReconnecting = false;
     currentFriendPk = null;
     localStorage.removeItem('last_chat_pk');
     if (initTimer) clearInterval(initTimer);
     forceDestroyPeer();
-    nostr.clearAllSubscriptions();
     
     document.getElementById('chat-interface').style.display = 'none';
     document.getElementById('qrcode-container').style.display = 'none';
@@ -98,7 +101,7 @@ function clearSessionState() {
 
 function startAsInitiator() {
     clearSessionState();
-    isGeneratingQR = true;  // 💡 開鎖
+    isGeneratingQR = true;  
     isScanningQR = false;
     
     window.logDebug("已重置環境，正在產生新通道...");
@@ -113,7 +116,6 @@ function startAsInitiator() {
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
     const initSub = () => {
-        // 如果已經不在產生 QR 狀態或已經進入聊天，直接拒絕非同步信號
         if (!isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected)) return;
         window.logDebug("📡 正在等待對方掃碼並發送 Offer...");
         
@@ -136,9 +138,12 @@ function startAsInitiator() {
 
                 if (data && data.type === 'init-offer') {
                     window.logDebug("📥 成功收到對方的連線邀請信號！");
-                    isGeneratingQR = false; // 💡 成功對接，解除狀態
+                    isGeneratingQR = false; 
                     if (initTimer) clearInterval(initTimer);
                     
+                    // 💡 對接成功，關閉萬能全域監聽，回歸精準監聽
+                    nostr.unsubscribeFromFriend('any');
+
                     currentFriendPk = authorPk;
                     localStorage.setItem('last_chat_pk', currentFriendPk);
                     
@@ -176,7 +181,7 @@ function startAsInitiator() {
 
 function startCameraScan() {
     clearSessionState();
-    isScanningQR = true; // 💡 開鎖
+    isScanningQR = true; 
     isGeneratingQR = false;
 
     document.getElementById('setup-container').style.display = 'none';
@@ -191,9 +196,8 @@ function startCameraScan() {
             try { await html5QrcodeScanner.stop(); } catch (err) {}
             document.getElementById('reader').style.display = 'none';
             
-            // 如果在掃碼中途使用者按了離開或其他操作，直接攔截
             if (!isScanningQR) return;
-            isScanningQR = false; // 💡 成功對接，解除狀態
+            isScanningQR = false; 
             
             window.logDebug("✅ 掃碼成功！正在初始化 WebRTC 實體...");
             currentFriendPk = decodedFriendPk;
@@ -225,7 +229,6 @@ function listenForMessages(friendPk) {
     if (!friendPk) return;
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
         try {
-            // 如果使用者此時按了產生新 QR 或去掃碼，直接把這邊的所有背景過期訊息攔截丟棄
             if (isGeneratingQR || isScanningQR) return;
 
             const senderPk = authorPk || friendPk;
