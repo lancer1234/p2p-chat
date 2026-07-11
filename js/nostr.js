@@ -1,5 +1,6 @@
 export class NostrManager {
-  constructor(relayUrl = 'wss://relay.damus.io') {
+  // 修改點：換掉死掉的 damus，改用最穩定的高速公共中繼站
+  constructor(relayUrl = 'wss://nos.lol') {
     this.relayUrl = relayUrl;
     this.relay = null;
     this.activeSubs = [];
@@ -8,16 +9,25 @@ export class NostrManager {
   async connect() {
     try {
       this.relay = window.NostrTools.relayInit(this.relayUrl);
-      this.relay.on('connect', () => console.log(`🌐 成功直連 Nostr 骨幹信道: ${this.relayUrl}`));
-      this.relay.on('error', () => console.error("Nostr 連接失敗"));
+      this.relay.on('connect', () => {
+        const logMsg = `🌐 信令通道已接通: ${this.relayUrl}`;
+        console.log(logMsg);
+        if (window.logDebug) window.logDebug(logMsg);
+      });
+      this.relay.on('error', () => {
+        if (window.logDebug) window.logDebug("❌ Nostr 中繼站連線失敗");
+      });
       await this.relay.connect();
     } catch (e) {
-      console.error("Nostr 連線異常:", e);
+      if (window.logDebug) window.logDebug(`❌ Nostr 異常: ${e.message}`);
     }
   }
 
   async sendEvent(mySk, friendPk, encryptedContent) {
-    if (!this.relay || this.relay.status !== 1) return;
+    if (!this.relay || this.relay.status !== 1) {
+      if (window.logDebug) window.logDebug("⚠️ 無法發射信號：中繼站尚未連線");
+      return;
+    }
 
     try {
       const hexSk = typeof mySk === 'string' ? mySk : window.NostrTools.bytesToHex(mySk);
@@ -33,9 +43,9 @@ export class NostrManager {
       event.sig = window.NostrTools.getSignature(event, hexSk);
 
       await this.relay.publish(event);
-      console.log("🚀 加密信號已發射");
+      if (window.logDebug) window.logDebug("🚀 信號已成功推播至 Nostr 廣播網");
     } catch (e) {
-      console.error("Nostr 發送失敗:", e);
+      if (window.logDebug) window.logDebug(`❌ 信號發射失敗: ${e.message}`);
     }
   }
 
@@ -70,6 +80,5 @@ export class NostrManager {
       try { sub.unsub(); } catch(e) {}
     });
     this.activeSubs = [];
-    console.log("🧹 已清空所有舊的 Nostr 訂閱監聽器");
   }
 }
