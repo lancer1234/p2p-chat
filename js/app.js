@@ -51,7 +51,7 @@ function isValidSignalingSchema(data) {
     return validTypes.includes(data.type) && data.sdp;
 }
 
-// 🟢 移除所有可能導致舊核心核心解析器衝突的匿名語法
+// 🟢 密鑰解鎖核心流（已補強錯誤追蹤）
 async function executeUnlockFlow() {
     const pinInput = document.getElementById('input-pin').value;
     if (isWeakPassword(pinInput)) {
@@ -67,11 +67,19 @@ async function executeUnlockFlow() {
             myKeyPair = { sk: decryptedSk, pk: cached.pk };
             logger.debug("🔑 身分解鎖成功。");
         } else {
-            const sk = window.NostrTools.generatePrivateKey();
-            const pk = window.NostrTools.getPublicKey(sk);
-            const encryptedSkHex = await Crypto.encryptSecret(sk, userPin);
+            // 💡 修正點 4：向下相容新舊版 nostr-tools (v1 使用 generatePrivateKey, v2 改名為 generateSecretKey)
+            let skBytes;
+            if (typeof window.NostrTools.generateSecretKey === 'function') {
+                skBytes = window.NostrTools.generateSecretKey();
+            } else {
+                skBytes = window.NostrTools.generatePrivateKey();
+            }
+            const skHex = typeof skBytes === 'string' ? skBytes : window.NostrTools.bytesToHex(skBytes);
+            const pk = window.NostrTools.getPublicKey(skHex);
+            
+            const encryptedSkHex = await Crypto.encryptSecret(skHex, userPin);
             Storage.saveEncryptedKeyPair(encryptedSkHex, pk);
-            myKeyPair = { sk, pk };
+            myKeyPair = { sk: skHex, pk: pk };
             logger.debug("✨ 全新密碼學硬化身分建立完畢。");
         }
         
@@ -79,7 +87,9 @@ async function executeUnlockFlow() {
         document.getElementById('setup-container').style.display = 'block';
         bootstrapApp();
     } catch(e) {
-        alert("密碼錯誤或身分金鑰受損！");
+        // 💡 修正點 1：落實 Code Review 精神，徹底把底層拋出的 Web Crypto Error 回顯至畫面
+        console.error("🔒 [Security Module Error]", e);
+        alert(e.stack || e.message || "未知密碼學核心錯誤");
     }
 }
 
