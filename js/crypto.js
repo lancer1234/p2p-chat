@@ -1,10 +1,8 @@
 export const Crypto = {
-  // 🟢 徹底平鋪引數物件宣告，解決 Safari 的 Unexpected token '{' 解析臭蟲
   async deriveKeyFromPin(pin, saltBytes) {
     const encoder = new TextEncoder();
     const pinBytes = encoder.encode(pin);
     
-    // 1. 將 importKey 的配置抽離成靜態常數變數
     const importFormat = "raw";
     const importAlgorithm = { name: "PBKDF2" };
     const extractable = false;
@@ -18,7 +16,6 @@ export const Crypto = {
       keyUsagesForDerive
     );
     
-    // 2. 將 deriveKey 的配置完全打散抽離
     const deriveAlgorithm = {
       name: "PBKDF2",
       salt: saltBytes,
@@ -43,8 +40,6 @@ export const Crypto = {
     const iv = crypto.getRandomValues(new Uint8Array(12));   
     
     const cryptoKey = await this.deriveKeyFromPin(pin, salt);
-    
-    // 抽離 AES-GCM 配置引數物件
     const encryptAlgorithm = { name: "AES-GCM", iv: iv };
     const plainBytes = encoder.encode(plainText);
 
@@ -63,18 +58,26 @@ export const Crypto = {
   },
 
   async decryptSecret(cipherTextHex, pin) {
+    // 💡 修正點 2：加入防爆機制，避免 hexToBytes 傳入空值直接崩潰
+    if (!cipherTextHex) {
+        throw new Error("找不到加密私鑰，快取可能已損壞或遺失。");
+    }
+
     const combined = window.NostrTools.hexToBytes(cipherTextHex);
-    if (combined.length < 29) throw new Error("數據包長度受損");
+    
+    // 💡 修正點 3 的衍生防禦：如果長度不符合隨機 Salt 的新格式(16+12+密文)，直接判定為舊格式快取
+    if (combined.length < 29) {
+        throw new Error("INVALID_FORMAT: 偵測到舊版加密格式金鑰，請清空快取重新初始化。");
+    }
     
     const salt = combined.slice(0, 16);
     const iv = combined.slice(16, 28);
     const encryptedData = combined.slice(28);
     
     const cryptoKey = await this.deriveKeyFromPin(pin, salt);
-    
-    // 抽離 AES-GCM 配置引數物件
     const decryptAlgorithm = { name: "AES-GCM", iv: iv };
 
+    // 這裡如果密鑰衍生錯誤，Web Crypto API 會直接拋出 OperationError 或 DataError
     const decrypted = await crypto.subtle.decrypt(
       decryptAlgorithm,
       cryptoKey,
