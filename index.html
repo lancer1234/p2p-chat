@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <!-- 🟢 完美的 CSP 標準：移除一切 stun 錯誤字串，僅放行 wss 通訊與核心 CDN -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://nos.lol wss://relay.snort.social wss://relay.damus.io wss://relay.primal.net; img-src 'self' data:;">
+    <!-- 🟢 修正後的 CSP 策略：只放行四大核心信令 WebSocket 節點與基本 CDN 資源 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://nos.lol wss://relay.damus.io wss://relay.primal.net wss://relay.nostr.band; img-src 'self' data:;">
     <title>📟 P2P Chat Enterprise Edition</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
