@@ -66,7 +66,6 @@ async function executeUnlockFlow() {
             myKeyPair = { sk: decryptedSk, pk: cached.pk };
             logger.debug("🔑 身分解鎖成功。");
         } else {
-            // 🟢 修正：向下相容所有新舊版金鑰生成命名空間，並導入自建的 bytesToHex Helper
             let skBytes;
             if (window.NostrTools && typeof window.NostrTools.generateSecretKey === 'function') {
                 skBytes = window.NostrTools.generateSecretKey();
@@ -89,7 +88,6 @@ async function executeUnlockFlow() {
         document.getElementById('setup-container').style.display = 'block';
         bootstrapApp();
     } catch(e) {
-        // 🟢 修正：不吞錯誤，將 e.stack 與底層異常型別完美透傳給畫面，方便狙擊問題
         console.error("🔒 [Security Module Error]", e);
         alert(e.stack || e.message || "密碼學核心通道發生異常");
     }
@@ -113,7 +111,7 @@ function bootstrapApp() {
                 if (!isGeneratingQR && !isScanningQR && isInChatMode) {
                     triggerNostrReconnect();
                 }
-            }, 1500);
+            }, 3000);
         }
     });
 }
@@ -407,22 +405,13 @@ function setupPeerEvents() {
         appendMessage(text, 'friend');
     });
 
-    p2pPeer.on('close', function() { 
-        isReconnecting = false; 
-        updateOnlineStatus(false); 
-    });
-    p2pPeer.on('error', function(err) { 
-        isReconnecting = false; 
-        updateOnlineStatus(false); 
-    });
+    p2pPeer.on('close', function() { isReconnecting = false; updateOnlineStatus(false); });
+    p2pPeer.on('error', function(err) { isReconnecting = false; updateOnlineStatus(false); });
 }
 
 async function triggerNostrReconnect() {
     if (isGeneratingQR || isScanningQR || !isInChatMode || !currentFriendPk || !isNostrReady || isReconnecting) return;
-    if (p2pPeer && p2pPeer.connected) { 
-        updateOnlineStatus(true); 
-        return; 
-    }
+    if (p2pPeer && p2pPeer.connected) { updateOnlineStatus(true); return; }
 
     isReconnecting = true; 
     updateOnlineStatus(false);
@@ -445,12 +434,13 @@ async function triggerNostrReconnect() {
         setupPeerEvents();
         setTimeout(function() { 
             isReconnecting = false; 
-        }, 8000);
+        }, 15000); // 被動端拉長冷卻期，防雙向信號高頻碰撞
     }
 }
 
 setInterval(function() {
+    // 💡 將心跳探測週期放寬到 12 秒，配合 NostrManager 內部的 4 秒安全鎖，徹底根治限流
     if (!isGeneratingQR && !isScanningQR && isInChatMode && currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
         triggerNostrReconnect();
     }
-}, 5000);
+}, 12000);
