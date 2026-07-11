@@ -12,10 +12,20 @@ let isReconnecting = false;
 let isInChatMode = false; 
 let initTimer = null;
 
+// 可視化面板日誌輸出
+window.logDebug = function(msg) {
+    const consoleEl = document.getElementById('debug-console');
+    if (consoleEl) {
+        consoleEl.innerText += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+};
+
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.services.mozilla.com' }
     ]
 };
 
@@ -26,13 +36,14 @@ if (!myKeyPair.sk || !myKeyPair.pk) {
     myKeyPair = { sk, pk };
 }
 
-nostr.connect().then(() => {
-    console.log("🌐 Nostr 網路骨幹已成功通電");
-    isNostrReady = true;
+window.logDebug(`我的公鑰: ${myKeyPair.pk.substring(0,8)}...`);
 
-    // 檢查是否有上一次未結束的對話
+nostr.connect().then(() => {
+    isNostrReady = true;
+    
     const savedLastPk = Storage.getLastChatPk();
     if (savedLastPk) {
+        window.logDebug("發現舊對話快取，正在嘗試背景無縫對接...");
         currentFriendPk = savedLastPk;
         isInChatMode = true; 
         showChatInterface();
@@ -54,7 +65,8 @@ document.getElementById('input-msg').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
 
-function 強制銷毀舊連線實體() {
+// 修改點：改成英文名稱，防止瀏覽器語法解析崩潰
+function forceDestroyPeer() {
     if (p2pPeer) {
         try {
             p2pPeer.removeAllListeners();
@@ -64,17 +76,15 @@ function 強制銷毀舊連線實體() {
     }
 }
 
-// 徹底阻斷與清除上一次快取的死鎖狀態
 function clearSessionState() {
     isInChatMode = false;
     isReconnecting = false;
     currentFriendPk = null;
     localStorage.removeItem('last_chat_pk');
     if (initTimer) clearInterval(initTimer);
-    強制銷毀舊連線實體();
+    forceDestroyPeer();
     nostr.clearAllSubscriptions();
     
-    // 隱藏所有可能衝突的介面
     document.getElementById('chat-interface').style.display = 'none';
     document.getElementById('qrcode-container').style.display = 'none';
     document.getElementById('reader').style.display = 'none';
@@ -83,6 +93,7 @@ function clearSessionState() {
 
 function startAsInitiator() {
     clearSessionState();
+    window.logDebug("已重置環境，正在產生新通道...");
     
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
@@ -95,6 +106,8 @@ function startAsInitiator() {
 
     const initSub = () => {
         if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
+        window.logDebug("📡 正在等待對方掃碼並發送 Offer...");
+        
         nostr.subscribeToFriend(myKeyPair.pk, 'any', async (rawContent, authorPk) => {
             try {
                 if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
@@ -113,17 +126,19 @@ function startAsInitiator() {
                 }
 
                 if (data && data.type === 'init-offer') {
+                    window.logDebug("📥 成功收到對方的連線邀請信號！");
                     if (initTimer) clearInterval(initTimer);
                     currentFriendPk = authorPk;
                     localStorage.setItem('last_chat_pk', currentFriendPk);
                     
-                    強制銷毀舊連線實體();
+                    forceDestroyPeer();
                     
                     p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
                     setupPeerEvents(); 
                     p2pPeer.signal(data.sdp);
 
                     p2pPeer.on('signal', async (webrtcAnswer) => {
+                        window.logDebug("📤 正在回傳應答信號 (Answer)...");
                         const answerPackage = { type: 'init-answer', sdp: webrtcAnswer };
                         await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
                     });
@@ -145,7 +160,7 @@ function startAsInitiator() {
         } else {
             clearInterval(initTimer);
         }
-    }, 3000);
+    }, 5000);
 }
 
 function startCameraScan() {
@@ -154,6 +169,7 @@ function startCameraScan() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
 
+    window.logDebug("📷 相機啟動中...");
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
     html5QrcodeScanner.start(
         { facingMode: "environment" },
@@ -162,17 +178,19 @@ function startCameraScan() {
             try { await html5QrcodeScanner.stop(); } catch (err) {}
             document.getElementById('reader').style.display = 'none';
             
+            window.logDebug("✅ 掃碼成功！正在初始化 WebRTC 實體...");
             currentFriendPk = decodedFriendPk;
             localStorage.setItem('last_chat_pk', currentFriendPk);
             
             isInChatMode = true; 
             showChatInterface();
-            appendMessage("已成功掃描信任密鑰，正在背景交換加密信道協議...", "system");
+            appendMessage("已成功掃描信任密鑰，正在發射 Offer 信號...", "system");
 
             p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
             setupPeerEvents();
             
             p2pPeer.on('signal', async (webrtcOffer) => {
+                window.logDebug("📤 正在向 Nostr 推播連線提議...");
                 const offerPackage = { type: 'init-offer', sdp: webrtcOffer };
                 await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
             });
@@ -181,7 +199,9 @@ function startCameraScan() {
             listenForMessages(currentFriendPk);
         },
         () => {}
-    ).catch(() => location.reload());
+    ).catch((err) => {
+        window.logDebug(`❌ 相機啟動失敗 (請確認是否為 HTTPS 或 localhost): ${err.message}`);
+    });
 }
 
 function listenForMessages(friendPk) {
@@ -207,18 +227,18 @@ function listenForMessages(friendPk) {
             if (data.type === 'leave') {
                 appendMessage("❌ 對方已中斷連線並離開了聊天室。", "system");
                 updateOnlineStatus(false);
-                強制銷毀舊連線實體();
+                forceDestroyPeer();
                 return;
             }
 
             if (!isInChatMode) return;
 
             if (data.type === 'init-answer') {
+                window.logDebug("📥 收到對方的 Answer 響應，正在打通對接直連...");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                console.log("📥 收到重連提議 (Offer)...");
-                強制銷毀舊連線實體();
+                forceDestroyPeer();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
                 setupPeerEvents();
@@ -230,7 +250,6 @@ function listenForMessages(friendPk) {
                     await nostr.sendEvent(myKeyPair.sk, senderPk, encAnswer);
                 });
             } else if (data.type === 'reconnect-answer') {
-                console.log("📥 收到重連應答 (Answer)...");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -318,7 +337,7 @@ function setupPeerEvents() {
     if (!p2pPeer) return;
 
     p2pPeer.on('connect', () => {
-        console.log("⚡ WebRTC P2P 直連成功！");
+        window.logDebug("⚡ [WebRTC] 雙向 P2P 直連管道打通！成功越過伺服器。");
         updateOnlineStatus(true);
     });
 
@@ -334,6 +353,7 @@ function setupPeerEvents() {
     });
 
     p2pPeer.on('error', (err) => { 
+        window.logDebug(`⚠️ WebRTC 底層連線重置: ${err.message}`);
         isReconnecting = false; 
         updateOnlineStatus(false); 
     });
@@ -349,12 +369,11 @@ async function triggerNostrReconnect() {
 
     isReconnecting = true; 
     updateOnlineStatus(false);
-    強制銷毀舊連線實體();
+    forceDestroyPeer();
 
     const amIInitiator = myKeyPair.pk > currentFriendPk;
 
     if (amIInitiator) {
-        console.log("🔄 [主導端] 發射主動重連協議 Offer...");
         p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
         setupPeerEvents(); 
 
@@ -365,7 +384,6 @@ async function triggerNostrReconnect() {
             await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
         });
     } else {
-        console.log("⏳ [接收端] 靜態轉入被動模式...");
         p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
         setupPeerEvents();
         setTimeout(() => { isReconnecting = false; }, 8000);
