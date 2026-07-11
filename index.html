@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <!-- 🟢 修正後的 CSP：完全移除 stun: 字串，只保留標準信令 WebSocket 協定 -->
+    <!-- 🟢 完美的 CSP 標準：移除一切 stun 錯誤字串，僅放行 wss 通訊與核心 CDN -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://nos.lol wss://relay.snort.social wss://relay.damus.io wss://relay.primal.net; img-src 'self' data:;">
-    <title>📟 P2P Chat Enterprise</title>
+    <title>📟 P2P Chat Enterprise Edition</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
@@ -89,7 +89,7 @@
 
     <div id="pin-container">
         <h1>🔐 身分驗證安全鎖</h1>
-        <div class="subtitle" id="pin-tip">請設定至少 8 位安全密碼（禁止使用連續或單一重複數字）</div>
+        <div class="subtitle" id="pin-tip">請設定至少 8 位安全密碼（將使用 50 萬次 PBKDF2 記憶體硬化加密）</div>
         <input type="password" id="input-pin" class="pin-input" placeholder="輸入或設定安全密碼">
         <button id="btn-unlock">確認解鎖 / 初始化身份</button>
     </div>
