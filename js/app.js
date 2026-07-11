@@ -12,7 +12,10 @@ let isReconnecting = false;
 let isInChatMode = false; 
 let initTimer = null;
 
-// 可視化面板日誌輸出
+// 💡 核心防禦鎖：防止非同步舊信號在準備連線時強行篡改介面
+let isGeneratingQR = false;
+let isScanningQR = false;
+
 window.logDebug = function(msg) {
     const consoleEl = document.getElementById('debug-console');
     if (consoleEl) {
@@ -41,8 +44,9 @@ window.logDebug(`我的公鑰: ${myKeyPair.pk.substring(0,8)}...`);
 nostr.connect().then(() => {
     isNostrReady = true;
     
+    // 初始化時，如果使用者還沒點擊任何按鈕，才允許載入舊快取
     const savedLastPk = Storage.getLastChatPk();
-    if (savedLastPk) {
+    if (savedLastPk && !isGeneratingQR && !isScanningQR) {
         window.logDebug("發現舊對話快取，正在嘗試背景無縫對接...");
         currentFriendPk = savedLastPk;
         isInChatMode = true; 
@@ -52,7 +56,9 @@ nostr.connect().then(() => {
         listenForMessages(currentFriendPk);
         
         setTimeout(() => {
-            triggerNostrReconnect();
+            if (!isGeneratingQR && !isScanningQR) {
+                triggerNostrReconnect();
+            }
         }, 1500);
     }
 });
@@ -65,7 +71,6 @@ document.getElementById('input-msg').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
 });
 
-// 修改點：改成英文名稱，防止瀏覽器語法解析崩潰
 function forceDestroyPeer() {
     if (p2pPeer) {
         try {
@@ -93,6 +98,9 @@ function clearSessionState() {
 
 function startAsInitiator() {
     clearSessionState();
+    isGeneratingQR = true;  // 💡 開鎖
+    isScanningQR = false;
+    
     window.logDebug("已重置環境，正在產生新通道...");
     
     document.getElementById('setup-container').style.display = 'none';
@@ -105,12 +113,13 @@ function startAsInitiator() {
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
     const initSub = () => {
-        if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
+        // 如果已經不在產生 QR 狀態或已經進入聊天，直接拒絕非同步信號
+        if (!isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected)) return;
         window.logDebug("📡 正在等待對方掃碼並發送 Offer...");
         
         nostr.subscribeToFriend(myKeyPair.pk, 'any', async (rawContent, authorPk) => {
             try {
-                if (isInChatMode || (p2pPeer && p2pPeer.connected)) return;
+                if (!isGeneratingQR || isInChatMode || (p2pPeer && p2pPeer.connected)) return;
                 if (!authorPk) return;
                 
                 let data = null;
@@ -127,7 +136,9 @@ function startAsInitiator() {
 
                 if (data && data.type === 'init-offer') {
                     window.logDebug("📥 成功收到對方的連線邀請信號！");
+                    isGeneratingQR = false; // 💡 成功對接，解除狀態
                     if (initTimer) clearInterval(initTimer);
+                    
                     currentFriendPk = authorPk;
                     localStorage.setItem('last_chat_pk', currentFriendPk);
                     
@@ -155,7 +166,7 @@ function startAsInitiator() {
 
     initSub();
     initTimer = setInterval(() => {
-        if (!isInChatMode && (!p2pPeer || !p2pPeer.connected)) {
+        if (isGeneratingQR && !isInChatMode && (!p2pPeer || !p2pPeer.connected)) {
             initSub();
         } else {
             clearInterval(initTimer);
@@ -165,6 +176,8 @@ function startAsInitiator() {
 
 function startCameraScan() {
     clearSessionState();
+    isScanningQR = true; // 💡 開鎖
+    isGeneratingQR = false;
 
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
@@ -177,6 +190,10 @@ function startCameraScan() {
         async (decodedFriendPk) => {
             try { await html5QrcodeScanner.stop(); } catch (err) {}
             document.getElementById('reader').style.display = 'none';
+            
+            // 如果在掃碼中途使用者按了離開或其他操作，直接攔截
+            if (!isScanningQR) return;
+            isScanningQR = false; // 💡 成功對接，解除狀態
             
             window.logDebug("✅ 掃碼成功！正在初始化 WebRTC 實體...");
             currentFriendPk = decodedFriendPk;
@@ -200,7 +217,7 @@ function startCameraScan() {
         },
         () => {}
     ).catch((err) => {
-        window.logDebug(`❌ 相機啟動失敗 (請確認是否為 HTTPS 或 localhost): ${err.message}`);
+        window.logDebug(`❌ 相機啟動失敗: ${err.message}`);
     });
 }
 
@@ -208,6 +225,9 @@ function listenForMessages(friendPk) {
     if (!friendPk) return;
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
         try {
+            // 如果使用者此時按了產生新 QR 或去掃碼，直接把這邊的所有背景過期訊息攔截丟棄
+            if (isGeneratingQR || isScanningQR) return;
+
             const senderPk = authorPk || friendPk;
             let data = null;
             
@@ -225,7 +245,6 @@ function listenForMessages(friendPk) {
             if (!data) return;
 
             if (data.type === 'leave') {
-                appendMessage("❌ 對方已中斷連線並離開了聊天室。", "system");
                 updateOnlineStatus(false);
                 forceDestroyPeer();
                 return;
@@ -320,6 +339,9 @@ function updateOnlineStatus(isOnline) {
 async function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
     
+    isGeneratingQR = false;
+    isScanningQR = false;
+
     if (currentFriendPk && isNostrReady) {
         try {
             const leavePackage = { type: 'leave' };
@@ -360,7 +382,7 @@ function setupPeerEvents() {
 }
 
 async function triggerNostrReconnect() {
-    if (!isInChatMode || !currentFriendPk || !isNostrReady || isReconnecting) return;
+    if (isGeneratingQR || isScanningQR || !isInChatMode || !currentFriendPk || !isNostrReady || isReconnecting) return;
     
     if (p2pPeer && p2pPeer.connected) {
         updateOnlineStatus(true);
@@ -378,7 +400,7 @@ async function triggerNostrReconnect() {
         setupPeerEvents(); 
 
         p2pPeer.on('signal', async (newWebrtcData) => {
-            if (!currentFriendPk || !isInChatMode) return;
+            if (isGeneratingQR || isScanningQR || !currentFriendPk || !isInChatMode) return;
             const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
             const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
             await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
@@ -391,7 +413,7 @@ async function triggerNostrReconnect() {
 }
 
 setInterval(() => {
-    if (isInChatMode && currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
+    if (!isGeneratingQR && !isScanningQR && isInChatMode && currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
         triggerNostrReconnect();
     }
 }, 5000);
