@@ -1,3 +1,16 @@
+// 🟢 自建純原生 Hex Helpers，杜絕任何外部版本(v1/v2)斷代及導出遺失的問題
+export function bytesToHex(bytes) {
+  return [...bytes].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function hexToBytes(hex) {
+  const arr = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < arr.length; i++) {
+    arr[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return arr;
+}
+
 export const Crypto = {
   async deriveKeyFromPin(pin, saltBytes) {
     const encoder = new TextEncoder();
@@ -54,20 +67,21 @@ export const Crypto = {
     combined.set(iv, salt.length);
     combined.set(new Uint8Array(encrypted), salt.length + iv.length);
     
-    return window.NostrTools.bytesToHex(combined);
+    // 🟢 修正：使用自建 Helper
+    return bytesToHex(combined);
   },
 
   async decryptSecret(cipherTextHex, pin) {
-    // 💡 修正點 2：加入防爆機制，避免 hexToBytes 傳入空值直接崩潰
+    // 🟢 修正：增加第一線防護，防止空快取直接崩潰
     if (!cipherTextHex) {
-        throw new Error("找不到加密私鑰，快取可能已損壞或遺失。");
+        throw new Error("找不到任何已存的身分私鑰密文包。");
     }
 
-    const combined = window.NostrTools.hexToBytes(cipherTextHex);
+    // 🟢 修正：使用自建 Helper
+    const combined = hexToBytes(cipherTextHex);
     
-    // 💡 修正點 3 的衍生防禦：如果長度不符合隨機 Salt 的新格式(16+12+密文)，直接判定為舊格式快取
     if (combined.length < 29) {
-        throw new Error("INVALID_FORMAT: 偵測到舊版加密格式金鑰，請清空快取重新初始化。");
+        throw new Error("INVALID_FORMAT: 檢測到舊格式明文快取，請執行清除快取指令。");
     }
     
     const salt = combined.slice(0, 16);
@@ -77,7 +91,6 @@ export const Crypto = {
     const cryptoKey = await this.deriveKeyFromPin(pin, salt);
     const decryptAlgorithm = { name: "AES-GCM", iv: iv };
 
-    // 這裡如果密鑰衍生錯誤，Web Crypto API 會直接拋出 OperationError 或 DataError
     const decrypted = await crypto.subtle.decrypt(
       decryptAlgorithm,
       cryptoKey,
