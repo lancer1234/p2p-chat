@@ -72,7 +72,6 @@
         #qrcode-container h3 { color: #0A0A0C; font-size: 0.85rem; font-weight: 600; margin: 0 0 16px 0; }
         #qrcode-container img { width: 100% !important; height: auto !important; display: block; image-rendering: pixelated; }
 
-        /* 滿版極簡聊天室 */
         #chat-interface { 
             display: none; 
             width: 100%; 
@@ -84,17 +83,15 @@
             top: 0; 
             left: 50%; 
             transform: translateX(-50%); 
-            z-index: 1; 
+            z-index: 100; 
         }
         
         #chat-header { height: 56px; border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; justify-content: space-between; background: var(--bg); }
         
-        /* 狀態列優化 */
         .status-container { display: flex; align-items: center; gap: 8px; }
         #status-text { font-size: 0.75rem; font-weight: 600; color: var(--text-muted); letter-spacing: 0.05em; }
         #status-dot { width: 6px; height: 6px; background: var(--text-muted); border-radius: 50%; transition: all 0.3s; }
         
-        /* 離開按鈕樣式 */
         #btn-leave { font-size: 0.8rem; color: var(--text-muted); cursor: pointer; background: transparent; border: none; width: auto; padding: 4px 8px; transition: color 0.2s; }
         #btn-leave:hover { color: var(--danger); }
         
