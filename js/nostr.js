@@ -1,3 +1,5 @@
+import { bytesToHex } from './crypto.js';
+
 export class NostrManager {
   constructor() {
     this.relayUrls = [
@@ -24,7 +26,6 @@ export class NostrManager {
         } catch(e) { resolve(false); }
       });
     });
-
     await Promise.all(connectionPromises);
   }
 
@@ -33,7 +34,8 @@ export class NostrManager {
     if (connectedRelays.length === 0) return;
 
     try {
-      const hexSk = typeof mySk === 'string' ? mySk : window.NostrTools.bytesToHex(mySk);
+      // 🟢 修正：完全阻斷對新舊版金鑰轉換 API 的依賴，相容二代結構
+      const hexSk = typeof mySk === 'string' ? mySk : bytesToHex(mySk);
       const event = {
         kind: 4,
         pubkey: window.NostrTools.getPublicKey(hexSk),
