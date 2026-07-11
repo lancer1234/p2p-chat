@@ -4,7 +4,6 @@ import { NostrManager } from './nostr.js';
 
 const GLOBAL_CHANNEL = 'any';
 
-// 💡 狀態機核心列舉定義
 const STATE_INIT = "INIT";
 const STATE_READY = "READY";
 const STATE_CREATE_QR = "CREATE_QR";
@@ -36,6 +35,7 @@ let nostr = new NostrManager();
 let isNostrReady = false;
 let initTimer = null;
 let userPin = "";
+let reconnectTimeoutTimer = null; // 💡 全局重連超時器
 
 const rtcConfig = {
     iceServers: [
@@ -45,25 +45,21 @@ const rtcConfig = {
     ]
 };
 
-// 💡 確定性狀態機分流渲染器：集中管理所有 UI 與背景狀態，徹底消滅競態
 function transitionToState(nextState) {
     logger.debug(`🎛️ 狀態轉移: [${currentSystemState}] ➔ [${nextState}]`);
     currentSystemState = nextState;
 
-    // 1. 隱藏所有面板
     document.getElementById('pin-container').style.display = 'none';
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('qrcode-container').style.display = 'none';
     document.getElementById('reader').style.display = 'none';
     document.getElementById('chat-interface').style.display = 'none';
 
-    // 2. 依狀態精準放行顯示
     if (nextState === STATE_INIT) {
         document.getElementById('pin-container').style.display = 'block';
     } 
     else if (nextState === STATE_READY) {
         document.getElementById('setup-container').style.display = 'block';
-        // 檢查是否有恢復按鈕的權限
         const savedLastPk = Storage.getLastChatPk();
         document.getElementById('btn-resume').style.display = savedLastPk ? 'block' : 'none';
     } 
@@ -134,12 +130,13 @@ function bootstrapApp() {
     nostr.connect().then(function() {
         isNostrReady = true;
         logger.debug("🌐 全球信令陣列接通就緒。");
-        // 💡 100% 落實修改：在此處完全不自動恢復聊天室，安靜等待使用者手動決定
+    }).catch(function(err) {
+        logger.debug(`❌ 信令網初始化失敗: ${err.message}`);
     });
 }
 
-// 綁定手動恢復對話流
 document.getElementById('btn-resume').addEventListener('click', function() {
+    if (!isNostrReady) { alert("信令中繼站仍在連線中，請稍候 1~2 秒。"); return; }
     const savedLastPk = Storage.getLastChatPk();
     if (!savedLastPk) return;
     
@@ -172,15 +169,14 @@ function forceDestroyPeer() {
 function clearSessionState() {
     if (currentFriendPk) nostr.unsubscribeFromFriend(currentFriendPk);
     nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
-
-    currentFriendPk = null;
-    localStorage.removeItem('last_chat_pk');
     if (initTimer) clearInterval(initTimer);
+    if (reconnectTimeoutTimer) clearTimeout(reconnectTimeoutTimer);
+    isReconnecting = false;
     forceDestroyPeer();
 }
 
 async function handleIncomingInitiatorSignal(rawContent, authorPk) {
-    // 💡 狀態機硬性卡閘：只有在等待 QR 掃描狀態時，才放行 init-offer，封死非同步幽靈干擾
+    // 💡 100% 落實修改 1：精準卡閘，只有在展示 QR 等待配對狀態時才允許解析 init-offer
     if (currentSystemState !== STATE_CREATE_QR || !authorPk) return;
     if (p2pPeer && p2pPeer.connected) return;
 
@@ -191,7 +187,10 @@ async function handleIncomingInitiatorSignal(rawContent, authorPk) {
             try {
                 const decryptedText = await Crypto.decryptData(myKeyPair.sk, authorPk, rawContent);
                 if (decryptedText) data = JSON.parse(decryptedText);
-            } catch (cryptoErr) { return; }
+            } catch (cryptoErr) { 
+                console.error("解密無效信號包", cryptoErr);
+                return; 
+            }
         }
 
         if (!isValidSignalingSchema(data) || data.type !== 'init-offer') return;
@@ -200,7 +199,6 @@ async function handleIncomingInitiatorSignal(rawContent, authorPk) {
         nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
 
         currentFriendPk = authorPk;
-        localStorage.setItem('last_chat_pk', currentFriendPk);
         forceDestroyPeer();
         
         p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
@@ -212,18 +210,18 @@ async function handleIncomingInitiatorSignal(rawContent, authorPk) {
             await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(answerPackage));
         });
 
-        Storage.saveFriend(currentFriendPk);
+        // 💡 100% 落實修改：在此處【絕不】寫入快取，僅切換到連線中畫面，靜候 WebRTC 成功對接
         transitionToState(STATE_CONNECTING);
         restoreChatLogs();
         listenForMessages(currentFriendPk);
-    } catch (e) {}
+    } catch (e) { console.error(e); }
 }
 
 function startAsInitiator() {
+    if (!isNostrReady) { alert("Nostr 矩陣尚未接通，請稍候 1~2 秒再試。"); return; }
+    
     clearSessionState();
-    // 💡 100% 落實修改：一開始即時物理清空變數與舊 Peer
     currentFriendPk = null;
-    forceDestroyPeer();
     
     transitionToState(STATE_CREATE_QR);
     
@@ -235,27 +233,24 @@ function startAsInitiator() {
 
     const runSubscription = function() {
         if (currentSystemState !== STATE_CREATE_QR) return;
-        logger.debug("📡 正在等待對方發射協議 Offer...");
-        // 💡 100% 落實修改：在訂閱前強制退訂舊的全域監聽，保證單一訂閱乾淨度
+        logger.debug("📡 正在開啟萬能集線器，等待對方 Offer...");
+        // 💡 100% 落實修改：subscribe 前先強制斬斷舊頻道，在 nostr.js 內部也做了去重覆保護
         nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
         nostr.subscribeToFriend(myKeyPair.pk, GLOBAL_CHANNEL, handleIncomingInitiatorSignal);
     };
 
     runSubscription();
     initTimer = setInterval(function() {
-        if (currentSystemState === STATE_CREATE_QR) {
-            runSubscription();
-        } else {
-            clearInterval(initTimer);
-        }
+        if (currentSystemState === STATE_CREATE_QR) runSubscription();
+        else clearInterval(initTimer);
     }, 5000);
 }
 
 function startCameraScan() {
+    if (!isNostrReady) { alert("Nostr 矩陣尚未接通，請稍候 1~2 秒再試。"); return; }
+    
     clearSessionState();
     currentFriendPk = null;
-    forceDestroyPeer();
-    
     transitionToState(STATE_SCAN_QR);
 
     const html5QrcodeScanner = new window.Html5Qrcode("reader");
@@ -263,12 +258,9 @@ function startCameraScan() {
         { facingMode: "environment" }, { fps: 20, qrbox: 250 }, 
         async function(decodedFriendPk) {
             try { await html5QrcodeScanner.stop(); } catch (err) {}
-            
             if (currentSystemState !== STATE_SCAN_QR) return;
             
             currentFriendPk = decodedFriendPk;
-            localStorage.setItem('last_chat_pk', currentFriendPk);
-            
             transitionToState(STATE_CONNECTING);
             restoreChatLogs();
 
@@ -280,17 +272,17 @@ function startCameraScan() {
                 await nostr.sendEvent(myKeyPair.sk, currentFriendPk, JSON.stringify(offerPackage));
             });
 
-            Storage.saveFriend(currentFriendPk);
             listenForMessages(currentFriendPk);
         },
         function() {}
-    ).catch(function(err) { 
-        logger.debug(`❌ 相機失敗: ${err.message}`); 
-    });
+    ).catch(function(err) { logger.error(err); });
 }
 
 function listenForMessages(friendPk) {
     if (!friendPk) return;
+    // 💡 100% 落實修改：在重新監聽前，物理阻斷該聯絡人的舊訂閱，杜絕重複疊加 callback
+    nostr.unsubscribeFromFriend(friendPk);
+    
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async function(rawContent, authorPk) {
         try {
             if (rawContent.length > 50000 || currentSystemState === STATE_READY) return;
@@ -324,7 +316,7 @@ function listenForMessages(friendPk) {
             } else if (data.type === 'reconnect-answer') {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
-        } catch (e) {}
+        } catch (e) { console.error(e); }
     });
 }
 
@@ -358,9 +350,7 @@ function restoreChatLogs() {
     if (!box) return;
     box.innerHTML = '';
     const logs = Storage.getMessageLogs(currentFriendPk);
-    logs.forEach(function(log) {
-        appendMessage(log.text, log.sender);
-    });
+    logs.forEach(function(log) { appendMessage(log.text, log.sender); });
     if (logs.length === 0) {
         box.innerHTML = `<div class="msg system">加密信道已就緒，等待背景協議對接...</div>`;
     }
@@ -403,6 +393,13 @@ function setupPeerEvents() {
     if (!p2pPeer) return;
 
     p2pPeer.on('connect', function() {
+        // 💡 100% 落實修改 2：只有當 WebRTC 真正握手打通的這一瞬間，才允許將資料永久化寫入快取與快取歷史！
+        if (currentFriendPk) {
+            Storage.saveFriend(currentFriendPk);
+            localStorage.setItem('last_chat_pk', currentFriendPk);
+        }
+        isReconnecting = false;
+        if (reconnectTimeoutTimer) clearTimeout(reconnectTimeoutTimer);
         transitionToState(STATE_CONNECTED);
     });
 
@@ -416,15 +413,27 @@ function setupPeerEvents() {
         if (currentSystemState === STATE_CONNECTED) transitionToState(STATE_CONNECTING);
     });
     p2pPeer.on('error', function(err) { 
+        console.error("WebRTC底層通訊重置", err);
         if (currentSystemState === STATE_CONNECTED) transitionToState(STATE_CONNECTING);
     });
 }
 
 async function triggerNostrReconnect() {
-    if (currentSystemState !== STATE_CONNECTING || !currentFriendPk || !isNostrReady) return;
-    if (p2pPeer && p2pPeer.connected) { transitionToState(STATE_CONNECTED); return; }
+    if (currentSystemState !== STATE_CONNECTING || !currentFriendPk || !isNostrReady || isReconnecting) return;
 
+    isReconnecting = true; 
+    updateOnlineStatus(false);
     forceDestroyPeer();
+
+    // 💡 100% 落實修改 4：為 initiator 與 receiver 雙向分支建立平等的 15 秒重連解鎖超時保護
+    if (reconnectTimeoutTimer) clearTimeout(reconnectTimeoutTimer);
+    reconnectTimeoutTimer = setTimeout(function() {
+        if (isReconnecting && currentSystemState === STATE_CONNECTING) {
+            logger.debug("⏳ 重連發射超時保護發動，解除 Reconnecting 鎖定引導下一輪探測。");
+            isReconnecting = false;
+        }
+    }, 15000);
+
     const amIInitiator = myKeyPair.pk > currentFriendPk;
 
     if (amIInitiator) {
@@ -443,9 +452,8 @@ async function triggerNostrReconnect() {
     }
 }
 
-// 💡 乾淨的狀態機探測心跳：完全與多重布林標記解耦
 setInterval(function() {
-    if (currentSystemState === STATE_CONNECTING) {
+    if (currentSystemState === STATE_CONNECTING && !isReconnecting) {
         triggerNostrReconnect();
     }
 }, 12000);
