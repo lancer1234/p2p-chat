@@ -1,9 +1,8 @@
 export class NostrManager {
-  // 修改點：換掉死掉的 damus，改用最穩定的高速公共中繼站
   constructor(relayUrl = 'wss://nos.lol') {
     this.relayUrl = relayUrl;
     this.relay = null;
-    this.activeSubs = [];
+    this.activeSubs = {}; // 💡 改用物件儲存，key 為 friendPk，方便精準退訂
   }
 
   async connect() {
@@ -52,6 +51,9 @@ export class NostrManager {
   subscribeToFriend(myPk, friendPk, onMessageReceived) {
     if (!this.relay || this.relay.status !== 1) return null;
 
+    // 💡 如果該 PK 已經有訂閱了，先退訂，避免重複監聽打架
+    this.unsubscribeFromFriend(friendPk);
+
     try {
       const filter = {
         kinds: [4],
@@ -67,7 +69,7 @@ export class NostrManager {
         onMessageReceived(event.content, event.pubkey);
       });
 
-      this.activeSubs.push(sub);
+      this.activeSubs[friendPk] = sub; // 💡 紀錄此好友的訂閱實體
       return sub;
     } catch (e) {
       console.error("Nostr 訂閱失敗:", e);
@@ -75,10 +77,22 @@ export class NostrManager {
     }
   }
 
+  // 💡 【大絕招】精準斬斷特定朋友的背景監聽，徹底防止舊訊息借屍還魂
+  unsubscribeFromFriend(friendPk) {
+    if (this.activeSubs[friendPk]) {
+      try {
+        this.activeSubs[friendPk].unsub();
+        console.log(`🧹 已精準退訂舊好友監聽: ${friendPk.substring(0,8)}...`);
+      } catch(e) {}
+      delete this.activeSubs[friendPk];
+    }
+  }
+
   clearAllSubscriptions() {
-    this.activeSubs.forEach(sub => {
-      try { sub.unsub(); } catch(e) {}
+    Object.keys(this.activeSubs).forEach(friendPk => {
+      try { this.activeSubs[friendPk].unsub(); } catch(e) {}
     });
-    this.activeSubs = [];
+    this.activeSubs = {};
+    console.log("🧹 已物理抹除所有 Nostr 監聽器");
   }
 }
