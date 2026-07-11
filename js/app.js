@@ -1,5 +1,5 @@
 import { Storage } from './storage.js';
-import { Crypto } from './crypto.js';
+import { Crypto, bytesToHex } from './crypto.js';
 import { NostrManager } from './nostr.js';
 
 const GLOBAL_CHANNEL = 'any';
@@ -51,7 +51,6 @@ function isValidSignalingSchema(data) {
     return validTypes.includes(data.type) && data.sdp;
 }
 
-// 🟢 密鑰解鎖核心流（已補強錯誤追蹤）
 async function executeUnlockFlow() {
     const pinInput = document.getElementById('input-pin').value;
     if (isWeakPassword(pinInput)) {
@@ -67,14 +66,17 @@ async function executeUnlockFlow() {
             myKeyPair = { sk: decryptedSk, pk: cached.pk };
             logger.debug("🔑 身分解鎖成功。");
         } else {
-            // 💡 修正點 4：向下相容新舊版 nostr-tools (v1 使用 generatePrivateKey, v2 改名為 generateSecretKey)
+            // 🟢 修正：向下相容所有新舊版金鑰生成命名空間，並導入自建的 bytesToHex Helper
             let skBytes;
-            if (typeof window.NostrTools.generateSecretKey === 'function') {
+            if (window.NostrTools && typeof window.NostrTools.generateSecretKey === 'function') {
                 skBytes = window.NostrTools.generateSecretKey();
-            } else {
+            } else if (window.NostrTools && typeof window.NostrTools.generatePrivateKey === 'function') {
                 skBytes = window.NostrTools.generatePrivateKey();
+            } else {
+                throw new Error("無法在當前 NostrTools 作用域下找到私鑰生成器。");
             }
-            const skHex = typeof skBytes === 'string' ? skBytes : window.NostrTools.bytesToHex(skBytes);
+            
+            const skHex = typeof skBytes === 'string' ? skBytes : bytesToHex(skBytes);
             const pk = window.NostrTools.getPublicKey(skHex);
             
             const encryptedSkHex = await Crypto.encryptSecret(skHex, userPin);
@@ -87,9 +89,9 @@ async function executeUnlockFlow() {
         document.getElementById('setup-container').style.display = 'block';
         bootstrapApp();
     } catch(e) {
-        // 💡 修正點 1：落實 Code Review 精神，徹底把底層拋出的 Web Crypto Error 回顯至畫面
+        // 🟢 修正：不吞錯誤，將 e.stack 與底層異常型別完美透傳給畫面，方便狙擊問題
         console.error("🔒 [Security Module Error]", e);
-        alert(e.stack || e.message || "未知密碼學核心錯誤");
+        alert(e.stack || e.message || "密碼學核心通道發生異常");
     }
 }
 
