@@ -1,14 +1,14 @@
 export class NostrManager {
-  // 採用 Damus 官方骨幹節點
   constructor(relayUrl = 'wss://relay.damus.io') {
     this.relayUrl = relayUrl;
     this.relay = null;
+    this.activeSubs = [];
   }
 
   async connect() {
     try {
       this.relay = window.NostrTools.relayInit(this.relayUrl);
-      this.relay.on('connect', () => console.log(`🌐 成功直連極速 Nostr 骨幹信道: ${this.relayUrl}`));
+      this.relay.on('connect', () => console.log(`🌐 成功直連 Nostr 骨幹信道: ${this.relayUrl}`));
       this.relay.on('error', () => console.error("Nostr 連接失敗"));
       await this.relay.connect();
     } catch (e) {
@@ -21,8 +21,6 @@ export class NostrManager {
 
     try {
       const hexSk = typeof mySk === 'string' ? mySk : window.NostrTools.bytesToHex(mySk);
-      
-      // 嚴格遵循 NIP-04 加密通訊標準格式，Damus 伺服器對這種標準 Kind 4 封包具有最高優先級轉發權
       const event = {
         kind: 4,
         pubkey: window.NostrTools.getPublicKey(hexSk),
@@ -35,7 +33,7 @@ export class NostrManager {
       event.sig = window.NostrTools.getSignature(event, hexSk);
 
       await this.relay.publish(event);
-      console.log("🚀 加密信號已精準發射至通訊管道");
+      console.log("🚀 加密信號已發射");
     } catch (e) {
       console.error("Nostr 發送失敗:", e);
     }
@@ -59,10 +57,19 @@ export class NostrManager {
         onMessageReceived(event.content, event.pubkey);
       });
 
+      this.activeSubs.push(sub);
       return sub;
     } catch (e) {
       console.error("Nostr 訂閱失敗:", e);
       return null;
     }
+  }
+
+  clearAllSubscriptions() {
+    this.activeSubs.forEach(sub => {
+      try { sub.unsub(); } catch(e) {}
+    });
+    this.activeSubs = [];
+    console.log("🧹 已清空所有舊的 Nostr 訂閱監聽器");
   }
 }
