@@ -4,14 +4,14 @@ import { NostrManager } from './nostr.js';
 
 let myKeyPair = Storage.getMyKeys();
 let p2pPeer = null;
-let currentFriendPk = localStorage.getItem('last_chat_pk'); 
+let currentFriendPk = null; 
 let nostr = new NostrManager(); 
 
 let isNostrReady = false;
 let isReconnecting = false;
 let isInChatMode = false; 
+let initTimer = null;
 
-// 保留 STUN 伺服器配置以維持跨網域的穿透穩定性
 const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -30,16 +30,15 @@ nostr.connect().then(() => {
     console.log("🌐 Nostr 網路骨幹已成功通電");
     isNostrReady = true;
 
-    const friends = Storage.getFriends();
-    Object.keys(friends).forEach(friendPk => {
-        listenForMessages(friendPk);
-    });
-
-    if (currentFriendPk) {
+    // 檢查是否有上一次未結束的對話
+    const savedLastPk = Storage.getLastChatPk();
+    if (savedLastPk) {
+        currentFriendPk = savedLastPk;
         isInChatMode = true; 
         showChatInterface();
         restoreChatLogs();
         updateOnlineStatus(false);
+        listenForMessages(currentFriendPk);
         
         setTimeout(() => {
             triggerNostrReconnect();
@@ -65,12 +64,25 @@ function 強制銷毀舊連線實體() {
     }
 }
 
-function startAsInitiator() {
-    localStorage.removeItem('last_chat_pk');
+// 徹底阻斷與清除上一次快取的死鎖狀態
+function clearSessionState() {
+    isInChatMode = false;
+    isReconnecting = false;
     currentFriendPk = null;
-    isInChatMode = false; 
-    
+    localStorage.removeItem('last_chat_pk');
+    if (initTimer) clearInterval(initTimer);
     強制銷毀舊連線實體();
+    nostr.clearAllSubscriptions();
+    
+    // 隱藏所有可能衝突的介面
+    document.getElementById('chat-interface').style.display = 'none';
+    document.getElementById('qrcode-container').style.display = 'none';
+    document.getElementById('reader').style.display = 'none';
+    document.getElementById('setup-container').style.display = 'block';
+}
+
+function startAsInitiator() {
+    clearSessionState();
     
     document.getElementById('setup-container').style.display = 'none';
     const container = document.getElementById('qrcode-container');
@@ -89,7 +101,6 @@ function startAsInitiator() {
                 if (!authorPk) return;
                 
                 let data = null;
-
                 try {
                     data = JSON.parse(rawContent);
                 } catch (jsonErr) {
@@ -102,7 +113,7 @@ function startAsInitiator() {
                 }
 
                 if (data && data.type === 'init-offer') {
-                    clearInterval(initTimer);
+                    if (initTimer) clearInterval(initTimer);
                     currentFriendPk = authorPk;
                     localStorage.setItem('last_chat_pk', currentFriendPk);
                     
@@ -118,17 +129,17 @@ function startAsInitiator() {
                     });
 
                     Storage.saveFriend(currentFriendPk);
-                    
                     isInChatMode = true;
                     showChatInterface();
                     restoreChatLogs();
+                    listenForMessages(currentFriendPk);
                 }
             } catch (e) {}
         });
     };
 
     initSub();
-    const initTimer = setInterval(() => {
+    initTimer = setInterval(() => {
         if (!isInChatMode && (!p2pPeer || !p2pPeer.connected)) {
             initSub();
         } else {
@@ -138,9 +149,7 @@ function startAsInitiator() {
 }
 
 function startCameraScan() {
-    localStorage.removeItem('last_chat_pk');
-    currentFriendPk = null;
-    isInChatMode = false;
+    clearSessionState();
 
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('reader').style.display = 'block';
@@ -152,8 +161,6 @@ function startCameraScan() {
         async (decodedFriendPk) => {
             try { await html5QrcodeScanner.stop(); } catch (err) {}
             document.getElementById('reader').style.display = 'none';
-            
-            強制銷毀舊連線實體();
             
             currentFriendPk = decodedFriendPk;
             localStorage.setItem('last_chat_pk', currentFriendPk);
@@ -210,7 +217,7 @@ function listenForMessages(friendPk) {
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             } 
             else if (data.type === 'reconnect-offer') {
-                console.log("📥 收到重連提議 (Offer)，轉為接收端應答...");
+                console.log("📥 收到重連提議 (Offer)...");
                 強制銷毀舊連線實體();
                 
                 p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
@@ -223,7 +230,7 @@ function listenForMessages(friendPk) {
                     await nostr.sendEvent(myKeyPair.sk, senderPk, encAnswer);
                 });
             } else if (data.type === 'reconnect-answer') {
-                console.log("📥 收到重連應答 (Answer)，直連管道建立中...");
+                console.log("📥 收到重連應答 (Answer)...");
                 if (p2pPeer && !p2pPeer.destroyed) p2pPeer.signal(data.sdp);
             }
         } catch (e) {}
@@ -270,9 +277,7 @@ function showChatInterface() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('qrcode-container').style.display = 'none';
     document.getElementById('reader').style.display = 'none';
-    
-    const chatUI = document.getElementById('chat-interface');
-    chatUI.style.display = 'flex';
+    document.getElementById('chat-interface').style.display = 'flex';
 }
 
 function updateOnlineStatus(isOnline) {
@@ -296,8 +301,6 @@ function updateOnlineStatus(isOnline) {
 async function leaveChat() {
     if (!confirm("確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。")) return;
     
-    isInChatMode = false; 
-
     if (currentFriendPk && isNostrReady) {
         try {
             const leavePackage = { type: 'leave' };
@@ -306,10 +309,9 @@ async function leaveChat() {
         } catch (e) {}
     }
 
-    強制銷毀舊連線實體();
     if (currentFriendPk) Storage.clearSession(currentFriendPk);
-    localStorage.removeItem('last_chat_pk'); 
-    location.href = location.pathname;
+    clearSessionState();
+    location.reload();
 }
 
 function setupPeerEvents() {
@@ -349,34 +351,29 @@ async function triggerNostrReconnect() {
     updateOnlineStatus(false);
     強制銷毀舊連線實體();
 
-    // 💡 防碰撞鎖定：只有公鑰排序大的一方主動送 Offer，小的一方只負責靜候被動接收
     const amIInitiator = myKeyPair.pk > currentFriendPk;
 
     if (amIInitiator) {
-        console.log("🔄 [主導端] 正在發射主動重連協議 Offer...");
+        console.log("🔄 [主導端] 發射主動重連協議 Offer...");
         p2pPeer = new window.SimplePeer({ initiator: true, trickle: false, config: rtcConfig });
         setupPeerEvents(); 
 
         p2pPeer.on('signal', async (newWebrtcData) => {
             if (!currentFriendPk || !isInChatMode) return;
-            
             const reconnectOffer = { type: 'reconnect-offer', sdp: newWebrtcData };
             const encryptedMessage = await Crypto.encryptData(myKeyPair.sk, currentFriendPk, JSON.stringify(reconnectOffer));
             await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encryptedMessage);
         });
     } else {
-        console.log("⏳ [接收端] 被動靜候模式，等待主導端重連信號...");
+        console.log("⏳ [接收端] 靜態轉入被動模式...");
         p2pPeer = new window.SimplePeer({ initiator: false, trickle: false, config: rtcConfig });
         setupPeerEvents();
-        
-        // 8秒超時保護，防單向永久鎖死
         setTimeout(() => { isReconnecting = false; }, 8000);
     }
 }
 
 setInterval(() => {
     if (isInChatMode && currentFriendPk && isNostrReady && (!p2pPeer || !p2pPeer.connected) && !isReconnecting) {
-        console.log("🔍 心跳排查：直連中斷，雙向主動提議發動中...");
         triggerNostrReconnect();
     }
 }, 5000);
