@@ -2,7 +2,6 @@ import { bytesToHex } from './crypto.js';
 
 export class NostrManager {
   constructor() {
-    // 🟢 汰換斷線的 snort，改用 2026 最穩定的四大核心骨幹節點
     this.relayUrls = [
       'wss://nos.lol',
       'wss://relay.damus.io',
@@ -11,7 +10,7 @@ export class NostrManager {
     ];
     this.activeRelays = [];
     this.activeSubs = {}; 
-    this.lastPublishTime = 0; // 💡 建立密碼學信號發射防護鎖
+    this.lastPublishTime = 0; 
   }
 
   async connect() {
@@ -33,10 +32,9 @@ export class NostrManager {
   }
 
   async sendEvent(mySk, friendPk, encryptedContent) {
-    // 💡 【100% 落實保護】：限制中中繼站發射冷卻，防止高頻踩踏踩中 Rate Limit
     const now = Date.now();
-    if (now - this.lastPublishTime < 4000) {
-        console.warn("🛡️ 觸發信號防護鎖：發射過於頻繁，就地實施防禦性丟棄。");
+    if (now - this.lastPublishTime < 5000) {
+        console.warn("🛡️ 狀態鎖定：發射頻率冷卻中，本次拒絕踩踏。");
         return;
     }
     this.lastPublishTime = now;
