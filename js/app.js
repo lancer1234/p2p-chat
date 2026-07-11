@@ -51,8 +51,8 @@ function isValidSignalingSchema(data) {
     return validTypes.includes(data.type) && data.sdp;
 }
 
-// 🔓 綁定解鎖與初始化按鈕
-document.getElementById('btn-unlock').addEventListener('click', async function() {
+// 🟢 移除所有可能導致舊核心核心解析器衝突的匿名語法
+async function executeUnlockFlow() {
     const pinInput = document.getElementById('input-pin').value;
     if (isWeakPassword(pinInput)) {
         alert("安全強度不足！密碼長度必須大於等於 8 位，且禁止使用連續或單一重複數字。");
@@ -81,7 +81,9 @@ document.getElementById('btn-unlock').addEventListener('click', async function()
     } catch(e) {
         alert("密碼錯誤或身分金鑰受損！");
     }
-});
+}
+
+document.getElementById('btn-unlock').addEventListener('click', executeUnlockFlow);
 
 function bootstrapApp() {
     nostr.connect().then(function() {
@@ -140,7 +142,6 @@ function clearSessionState() {
     document.getElementById('setup-container').style.display = 'block';
 }
 
-// 💡 抽離信號處理函數，杜絕巢狀結構造成的編譯錯誤
 async function handleIncomingInitiatorSignal(rawContent, authorPk) {
     if (rawContent.length > 50000 || !isGeneratingQR || isInChatMode || !authorPk) return;
     if (p2pPeer && p2pPeer.connected) return;
