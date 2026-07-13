@@ -151,11 +151,19 @@ async function executeUnlockFlow() {
 document.getElementById('btn-unlock').addEventListener('click', executeUnlockFlow);
 
 function bootstrapApp() {
-    nostr.connect(updateRelayUIIndicator).then(function() {
+    // 💡 異步聯動優化：傳入動態異步回呼，只要中繼站矩陣任一軌亮綠燈，立刻解鎖 READY 狀態閘門，免去 Promise 提前 Resolve 死鎖
+    const onAnyRelayConnectedTrigger = function() {
+        if (!isNostrReady) {
+            isNostrReady = true;
+            logger.debug("🌐 全球信令陣列接通就緒。");
+        }
+    };
+
+    nostr.connect(updateRelayUIIndicator, onAnyRelayConnectedTrigger).then(function() {
+        // 雙重校驗
         isNostrReady = true;
-        logger.debug("🌐 全球信令陣列接通就緒。");
     }).catch(function(err) {
-        logger.debug("❌ 信令矩陣初始化失敗。");
+        console.error("Pool連線阻斷", err);
     });
 }
 
