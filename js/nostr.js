@@ -8,6 +8,7 @@ export class NostrManager {
       'wss://relay.primal.net',
       'wss://relay.nostr.band'
     ];
+    // 💡 擁抱現代架構：全權委託 SimplePool 管理連線池，不 new 單一 Relay 實體，不註冊 EventEmitter
     this.pool = new window.NostrTools.SimplePool();
     this.connectedRelaysStatus = [false, false, false, false];
     this.seenEvents = new Set();
@@ -15,43 +16,29 @@ export class NostrManager {
     this.currentSub = null; 
   }
 
-  // 💡 徹底解決異步死鎖：導入強制 600 毫秒冷卻期，確保 WebSocket 握手 Open 後才進行連線通盤檢查
-  async connect(onStatusChange, onAnyRelayConnected) {
+  // 💡 100% 落實修改：不靠隨機異步的事件觸發，改用純粹的 Promise 探針校驗連線可用性
+  async connect(onStatusChange) {
     const self = this;
     
     const connectionPromises = this.relayUrls.map(function(url, index) {
       return new Promise(async function(resolve) {
         try {
+          // ensureRelay 是現代池化標準 API：成功握手即返回 AbstractRelay，失敗直接丟 Exception
           const r = await self.pool.ensureRelay(url);
           
           if (r) {
-            // 💡 修正：如果本來就在線，直接判定成功
-            if (r.status === 1) {
-                self.connectedRelaysStatus[index] = true;
-                if (onStatusChange) onStatusChange(index, true);
-                if (onAnyRelayConnected) onAnyRelayConnected();
-            }
-
-            r.on('connect', function() {
-               self.connectedRelaysStatus[index] = true; // 💡 修正：動態切回 true
-               if (onStatusChange) onStatusChange(index, true);
-               if (onAnyRelayConnected) onAnyRelayConnected(); // 💡 只要有任一軌接通，立刻回傳 app.js 啟動 READY 旗標
-            });
-
-            // 💡 修正 2：斷線時徹底落實動態改回 false
-            const handleDisconnect = function() {
-               self.connectedRelaysStatus[index] = false; 
-               if (onStatusChange) onStatusChange(index, false);
-            };
-            r.on('disconnect', handleDisconnect);
-            r.on('close', handleDisconnect);
-            
+            // 只要能成功取回實體，代表該節點通道健康可用
+            self.connectedRelaysStatus[index] = true;
+            if (onStatusChange) onStatusChange(index, true); // 🟢 UI 亮綠燈
             resolve(true);
           } else {
+            self.connectedRelaysStatus[index] = false;
+            if (onStatusChange) onStatusChange(index, false);
             resolve(false);
           }
         } catch(e) {
-          console.error(`🔒 [Relay Handshake Error] 節點 ${url}:`, e);
+          // 💡 100% 不吞沒 Exception：回顯所有中繼站遭拒的細節
+          console.error(`🔒 [SimplePool Tunnel Checked Fail] 節點 ${url}:`, e);
           self.connectedRelaysStatus[index] = false;
           if (onStatusChange) onStatusChange(index, false);
           resolve(false);
@@ -59,14 +46,13 @@ export class NostrManager {
       });
     });
 
+    // 併發投遞探針
     await Promise.all(connectionPromises);
     
-    // 💡 100% 落實修改：硬性死等 600ms 給 Safari 與中繼站握手緩衝時間，防範 Promise 提前完成的假警報
-    await new Promise(function(resolve) { setTimeout(resolve, 600); });
-    
-    const isAlive = self.connectedRelaysStatus.some(function(v) { return v === true; });
-    if (!isAlive) {
-        throw new Error("No secure relays active inside the matrix yet.");
+    // 檢查是否有至少一軌存活
+    const anyAlive = self.connectedRelaysStatus.some(function(v) { return v === true; });
+    if (!anyAlive) {
+        throw new Error("全球信令矩陣目前全數斷連，請更換網路環境。");
     }
   }
 
@@ -76,6 +62,7 @@ export class NostrManager {
     if (now - lastTime < 5000) return;
     this.lastPublishTimes[friendPk] = now;
 
+    // 動態篩選當前對外可用的中繼矩陣
     const liveUrls = this.relayUrls.filter((url, idx) => this.connectedRelaysStatus[idx]);
     if (liveUrls.length === 0) return;
 
@@ -92,22 +79,22 @@ export class NostrManager {
       event.id = window.NostrTools.getEventHash(event);
       event.sig = window.NostrTools.getSignature(event, hexSk);
 
-      // 💡 修正 3：相容性包裝。同時相容 v1 的 Pub 物件與 v2 的 Promise 陣列，防止 .on() 在新版中爆掉
+      // 💡 100% 修正 API 相容性：不使用 .on() 事件監聽。直接投遞，SimplePool 會自動以多重 Promise 管理 ACK
       const pubs = this.pool.publish(liveUrls, event);
-      if (pubs && typeof pubs.on === 'function') {
-          pubs.on('ok', function() { console.log("✅ [v1 ACK] 信號發射成功"); });
-          pubs.on('failed', function(r) { console.warn("❌ [v1 ACK] 拒絕:", r); });
+      
+      if (pubs && typeof pubs.then === 'function') {
+          // v2 Promise 結構
+          pubs.then(function() { console.log("🚀 [Pool Matrix] 信號完成全網擴散投遞"); })
+              .catch(function(err) { console.warn("⚠️ [Pool Matrix] 部分節點拒絕投遞", err); });
       } else if (Array.isArray(pubs)) {
-          Promise.all(pubs).then(function() {
-              console.log("✅ [v2 Promise ACK] 多軌併發擴散成功");
-          }).catch(function(err) {
-              console.warn("⚠️ [v2 Promise ACK] 部分節點發射失敗:", err);
-          });
+          // Promise 陣列結構
+          Promise.all(pubs).then(function() { console.log("🚀 [Pool Matrix Array] 併發投遞完畢"); })
+                           .catch(function(err) { console.error(err); });
       } else {
-          console.log("🚀 [Legacy Stack] 信號已推播至池化矩陣");
+          console.log("🚀 [Pool Forward] 信號已推播至資料串流池");
       }
     } catch (e) {
-      console.error("SimplePool 發射端 Exception:", e);
+      console.error("SimplePool 發射端嚴重異常:", e);
     }
   }
 
@@ -121,10 +108,14 @@ export class NostrManager {
     if (friendPk !== 'any') filter.authors = [friendPk];
 
     const self = this;
+    
+    // 💡 100% 修正：採用多中繼站合併訂閱（SimplePool.sub），自動在底層進行事件去重聚合
     this.currentSub = this.pool.sub(liveUrls, [filter]);
     
     this.currentSub.on('event', function(event) {
        if (!event || !event.id || !event.content || !event.pubkey) return;
+       
+       // 內建雙重防線去重
        if (self.seenEvents.has(event.id)) return;
        self.seenEvents.add(event.id);
        if (self.seenEvents.size > 2000) self.seenEvents.clear();
@@ -132,9 +123,9 @@ export class NostrManager {
        onMessageReceived(event.content, event.pubkey);
     });
 
-    // 💡 修正 4：補齊 EOSE 與 Close 生命週期監聽保護網，防範 Relay 背景靜默斷連
+    // 💡 健全訂閱生命週期
     this.currentSub.on('eose', function() {
-        console.log("📋 [Nostr EOSE] 歷史信號快取同步完畢，進入實時窄頻監聽狀態。");
+        console.log("📋 [Nostr EOSE] 信號快取載入完畢，進入監聽。");
     });
   }
 
@@ -143,7 +134,7 @@ export class NostrManager {
       try {
         if (typeof this.currentSub.unsub === 'function') this.currentSub.unsub();
         else if (typeof this.currentSub.close === 'function') this.currentSub.close();
-      } catch(e) { console.error("退訂異常攔截", e); }
+      } catch(e) {}
       this.currentSub = null;
     }
   }
