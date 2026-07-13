@@ -53,7 +53,6 @@ export const Storage = {
     localStorage.setItem('friends', JSON.stringify(friends));
   },
 
-  // 💡 【精準重置身分】：僅物理銷毀密碼學核心、對話紀錄與好友，保留未來 UI 設定值
   resetIdentity() {
     const friends = this.safeParse(localStorage.getItem('friends'), {});
     Object.keys(friends).forEach(function(friendPk) {
@@ -63,6 +62,5 @@ export const Storage = {
     localStorage.removeItem('my_pk');
     localStorage.removeItem('last_chat_pk');
     localStorage.removeItem('friends');
-    console.log("🧹 密碼學身分與通訊紀錄已安全抹除。");
   }
 };
