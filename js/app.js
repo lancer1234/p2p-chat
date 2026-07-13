@@ -34,7 +34,7 @@ let currentFriendPk = null;
 let nostr = new NostrManager(); 
 let isNostrReady = false;
 let initTimer = null;
-let qrTimeoutTimer = null; // 💡 QR 碼配對配對配對 60 秒限時器
+let qrTimeoutTimer = null; 
 let userPin = "";
 let reconnectTimeoutTimer = null; 
 
@@ -46,7 +46,6 @@ const rtcConfig = {
     ]
 };
 
-// 💡 動態更迭 Relay 網頁看板狀態燈號的回呼函式
 function updateRelayUIIndicator(index, isConnected) {
     const el = document.getElementById(`relay-${index}`);
     if (!el) return;
@@ -100,20 +99,13 @@ function isValidSignalingSchema(data) {
     return validTypes.includes(data.type) && data.sdp;
 }
 
-// 💡 新增功能：切換 PIN 碼可視性
 document.getElementById('checkbox-show-pin').addEventListener('change', function(e) {
-    const pinField = document.getElementById('input-pin');
-    pinField.type = e.target.checked ? "text" : "password";
+    document.getElementById('input-pin').type = e.target.checked ? "text" : "password";
 });
 
-// 💡 物理重置身分安全確認流
 document.getElementById('btn-reset-identity').addEventListener('click', function() {
-    const step1 = confirm("⚠️ 警告：即將執行身分重置流程！\n\n此操作將永久刪除：\n✓ 本地私鑰與信任公鑰\n✓ 所有聯絡人好友\n✓ 所有的加密聊天紀錄\n\n此操作無法復原，是否確定？");
+    const step1 = confirm("⚠️ 警告：即將物理清除身分！是否確定？");
     if (!step1) return;
-    
-    const step2 = confirm("🚨 這是最後的確認：點擊確認後將徹底抹除資料，無法救回！");
-    if (!step2) return;
-
     Storage.resetIdentity();
     location.reload();
 });
@@ -121,7 +113,7 @@ document.getElementById('btn-reset-identity').addEventListener('click', function
 async function executeUnlockFlow() {
     const pinInput = document.getElementById('input-pin').value;
     if (isWeakPassword(pinInput)) {
-        alert("安全強度不足！密碼長度必須大於等於 8 位，且禁止使用常見弱密碼組合。");
+        alert("安全強度不足！密碼長度必須大於等於 8 位。");
         return;
     }
     userPin = pinInput;
@@ -145,7 +137,7 @@ async function executeUnlockFlow() {
             const encryptedSkHex = await Crypto.encryptSecret(skHex, userPin);
             Storage.saveEncryptedKeyPair(encryptedSkHex, pk);
             myKeyPair = { sk: skHex, pk: pk };
-            logger.debug("✨ 全新密碼學硬化身分建立完畢。");
+            logger.debug("✨ 全新身分硬化儲存完畢。");
         }
         
         transitionToState(STATE_READY);
@@ -159,17 +151,16 @@ async function executeUnlockFlow() {
 document.getElementById('btn-unlock').addEventListener('click', executeUnlockFlow);
 
 function bootstrapApp() {
-    // 💡 將動態更新燈號的回呼函式注入連線矩陣
     nostr.connect(updateRelayUIIndicator).then(function() {
         isNostrReady = true;
         logger.debug("🌐 全球信令陣列接通就緒。");
     }).catch(function(err) {
-        logger.debug(`❌ 信令網連線失敗: ${err.message}`);
+        logger.debug("❌ 信令矩陣初始化失敗。");
     });
 }
 
 document.getElementById('btn-resume').addEventListener('click', function() {
-    if (!isNostrReady) { alert("信令中繼矩陣仍在同步中，請稍候。"); return; }
+    if (!isNostrReady) { alert("信令矩陣仍在同步中，請稍候。"); return; }
     const savedLastPk = Storage.getLastChatPk();
     if (!savedLastPk) return;
     
@@ -200,8 +191,7 @@ function forceDestroyPeer() {
 }
 
 function clearSessionState() {
-    if (currentFriendPk) nostr.unsubscribeFromFriend(currentFriendPk);
-    nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
+    nostr.clearAllSubscriptions();
     if (initTimer) clearInterval(initTimer);
     if (reconnectTimeoutTimer) clearTimeout(reconnectTimeoutTimer);
     if (qrTimeoutTimer) clearTimeout(qrTimeoutTimer);
@@ -226,7 +216,6 @@ async function handleIncomingInitiatorSignal(rawContent, authorPk) {
 
         if (initTimer) clearInterval(initTimer);
         if (qrTimeoutTimer) clearTimeout(qrTimeoutTimer);
-        nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
 
         currentFriendPk = authorPk;
         forceDestroyPeer();
@@ -261,10 +250,9 @@ function startAsInitiator() {
     qr.make();
     container.innerHTML = '<h3>請對方掃描 QR Code</h3>' + qr.createImgTag(6);
 
-    // 💡 增加 60 秒配對逾時保護
     qrTimeoutTimer = setTimeout(function() {
         if (currentSystemState === STATE_CREATE_QR) {
-            alert("⏳ 配對逾時（已超過 60 秒未有裝置掃描），系統已自動重置安全通道。");
+            alert("⏳ 配對逾時，系統已自動重置。");
             clearSessionState();
             transitionToState(STATE_READY);
         }
@@ -273,7 +261,6 @@ function startAsInitiator() {
     const runSubscription = function() {
         if (currentSystemState !== STATE_CREATE_QR) return;
         logger.debug("📡 等待配對 Offer 中...");
-        nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
         nostr.subscribeToFriend(myKeyPair.pk, GLOBAL_CHANNEL, handleIncomingInitiatorSignal);
     };
 
@@ -319,7 +306,6 @@ function startCameraScan() {
 
 function listenForMessages(friendPk) {
     if (!friendPk) return;
-    nostr.unsubscribeFromFriend(friendPk);
     
     nostr.subscribeToFriend(myKeyPair.pk, friendPk, async function(rawContent, authorPk) {
         try {
@@ -394,7 +380,6 @@ function restoreChatLogs() {
     }
 }
 
-// 💡 升級：100% 依據 Code Review 建議，即時顯示精準的連線品質標籤與對應燈號顏色
 function updateOnlineStatus(isOnline) {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
@@ -464,7 +449,7 @@ async function triggerNostrReconnect() {
     if (reconnectTimeoutTimer) clearTimeout(reconnectTimeoutTimer);
     reconnectTimeoutTimer = setTimeout(function() {
         if (currentSystemState === STATE_CONNECTING) {
-            logger.debug("⏳ 探測冷卻結束，引導下一輪安全對接。");
+            logger.debug("⏳ 探測冷卻結束，引導下一輪對接。");
         }
     }, 15000);
 
