@@ -2,12 +2,11 @@ import { bytesToHex } from './crypto.js';
 
 export class NostrManager {
   constructor() {
-    // 🟢 替換為亞洲區握手穿透率最高、最不易被公司學校防火牆阻擋的 4 個全新備援節點
     this.relayUrls = [
-      'wss://relay.wtf',
-      'wss://pub.elftown.com',
-      'wss://relay.current.fyi',
-      'wss://no-str.org'
+      'wss://nos.lol',
+      'wss://relay.damus.io',
+      'wss://relay.primal.net',
+      'wss://relay.nostr.band'
     ];
     this.relays = {};        
     this.activeRelays = [];  
@@ -16,16 +15,16 @@ export class NostrManager {
     this.lastPublishTimes = {};  
   }
 
-  async connect() {
+  // 💡 升級：傳入動態更新 UI 燈號的回呼函式 (onStatusChange)
+  async connect(onStatusChange) {
     const self = this;
-    const connectionPromises = this.relayUrls.map(function(url) {
+    const connectionPromises = this.relayUrls.map(function(url, index) {
       return new Promise(function(resolve) {
         try {
-          if (self.relays[url]) {
-            if (self.relays[url].status === 1) {
-              resolve(true);
-              return;
-            }
+          if (self.relays[url] && self.relays[url].status === 1) {
+            if (onStatusChange) onStatusChange(index, true);
+            resolve(true);
+            return;
           }
 
           const relay = window.NostrTools.relayInit(url);
@@ -35,31 +34,36 @@ export class NostrManager {
             if (!self.activeRelays.includes(relay)) {
               self.activeRelays.push(relay);
             }
+            if (onStatusChange) onStatusChange(index, true); // 🟢 亮綠燈
             resolve(true);
           });
 
           const removeRelayHandler = function() {
             self.activeRelays = self.activeRelays.filter(function(r) { return r !== relay; });
+            if (onStatusChange) onStatusChange(index, false); // 🔴 亮紅燈
           };
           relay.on('disconnect', removeRelayHandler);
           relay.on('close', removeRelayHandler);
 
-          relay.connect().catch(function() { resolve(false); });
-        } catch(e) { resolve(false); }
+          relay.connect().catch(function() { 
+            if (onStatusChange) onStatusChange(index, false);
+            resolve(false); 
+          });
+        } catch(e) { 
+          if (onStatusChange) onStatusChange(index, false);
+          resolve(false); 
+        }
       });
     });
     
     await Promise.all(connectionPromises);
-    if (this.activeRelays.length === 0) {
-      throw new Error("No secure relays connected");
-    }
   }
 
   async sendEvent(mySk, friendPk, encryptedContent) {
     const now = Date.now();
     const lastTime = this.lastPublishTimes[friendPk] || 0;
     if (now - lastTime < 5000) {
-        console.warn(`🛡️ 好友 ${friendPk.substring(0,6)} 通道冷卻中，避免觸發限流。`);
+        console.warn(`🛡️ 狀態鎖定：發射頻率冷卻中。`);
         return;
     }
     this.lastPublishTimes[friendPk] = now;
@@ -84,12 +88,10 @@ export class NostrManager {
         try {
           const pub = relay.publish(event);
           pub.on('ok', function() { console.log(`✅ 信號在 ${relay.url} 發射成功`); });
-          pub.on('failed', function(reason) { console.warn(`❌ ${relay.url} 拒絕發射: ${reason}`); });
+          pub.on('failed', function(reason) { console.warn(`❌ ${relay.url} 拒絕: ${reason}`); });
         } catch(err) {}
       });
-    } catch (e) {
-      console.error("發射模組異常", e);
-    }
+    } catch (e) { console.error(e); }
   }
 
   subscribeToFriend(myPk, friendPk, onMessageReceived) {
