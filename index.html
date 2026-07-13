@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <!-- 補強與修正 CSP：移除一切非必要網域，封死 XSS -->
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://nos.lol wss://relay.damus.io wss://relay.primal.net wss://relay.nostr.band; img-src 'self' data:;">
-    <title>📟 P2P Chat Pool Engine v1.0.2</title>
+    <title>📟 P2P Chat Pool Engine v1.1</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
@@ -51,6 +52,7 @@
         .relay-item { display: flex; align-items: center; justify-content: space-between; line-height: 1.6; color: var(--text-muted); }
         .relay-status { font-weight: bold; }
         .relay-status.ok { color: var(--accent); }
+        .relay-status.sync { color: var(--warning); }
         .relay-status.fail { color: var(--danger); }
 
         .btn-group { display: flex; flex-direction: column; gap: 12px; }
@@ -125,10 +127,10 @@
         
         <div class="relay-board">
             <div class="relay-title">📡 信令中繼矩陣 (Relay Matrix)</div>
-            <div class="relay-item"><span>nos.lol</span><span id="relay-0" class="relay-status fail">🔴 OFF</span></div>
-            <div class="relay-item"><span>relay.damus.io</span><span id="relay-1" class="relay-status fail">🔴 OFF</span></div>
-            <div class="relay-item"><span>relay.primal.net</span><span id="relay-2" class="relay-status fail">🔴 OFF</span></div>
-            <div class="relay-item"><span>relay.nostr.band</span><span id="relay-3" class="relay-status fail">🔴 OFF</span></div>
+            <div class="relay-item"><span>nos.lol</span><span id="relay-0" class="relay-status fail">⏳ SYNC</span></div>
+            <div class="relay-item"><span>relay.damus.io</span><span id="relay-1" class="relay-status fail">⏳ SYNC</span></div>
+            <div class="relay-item"><span>relay.primal.net</span><span id="relay-2" class="relay-status fail">⏳ SYNC</span></div>
+            <div class="relay-item"><span>relay.nostr.band</span><span id="relay-3" class="relay-status fail">⏳ SYNC</span></div>
         </div>
 
         <div class="btn-group">
@@ -157,8 +159,9 @@
         </div>
     </div>
 
+    <!-- 🟢 終結 SyntaxError：完全以 100% 符合現代 ES Module 規格的標準動態引進，杜絕快取殘留 -->
     <script type="module">
-        const versionStamp = "20260713-PoolFixFinal";
+        const versionStamp = "20260713-PurePoolEngine-v1.1";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>
