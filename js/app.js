@@ -105,7 +105,7 @@ document.getElementById('checkbox-show-pin').addEventListener('change', function
 });
 
 document.getElementById('btn-reset-identity').addEventListener('click', function() {
-    const step1 = confirm("⚠️ 警告：即將物理清除身分！是否確定？");
+    const step1 = confirm("⚠️ 警告：即將清除身分！是否確定？");
     if (!step1) return;
     Storage.resetIdentity();
     location.reload();
@@ -124,7 +124,7 @@ async function executeUnlockFlow() {
         if (cached.esk && cached.pk) {
             const decryptedSk = await Crypto.decryptSecret(cached.esk, userPin);
             myKeyPair = { sk: decryptedSk, pk: cached.pk };
-            logger.debug("🔑 身分解鎖成功。");
+            logger.debug("身分解鎖成功。");
         } else {
             let skBytes;
             if (window.NostrTools && typeof window.NostrTools.generateSecretKey === 'function') {
@@ -138,7 +138,7 @@ async function executeUnlockFlow() {
             const encryptedSkHex = await Crypto.encryptSecret(skHex, userPin);
             Storage.saveEncryptedKeyPair(encryptedSkHex, pk);
             myKeyPair = { sk: skHex, pk: pk };
-            logger.debug("✨ 全新身分硬化儲存完畢。");
+            logger.debug("全新身分儲存完畢。");
         }
         
         transitionToState(STATE_READY);
@@ -156,7 +156,7 @@ function bootstrapApp() {
         // 💡 修正點 1 落地：不使用舊版 API，只要收到連線池的成功回呼，100% 釋放 READY 狀態鎖
         if (!isNostrReady) {
             isNostrReady = true;
-            logger.debug("🌐 全球信令陣列接通就緒。");
+            logger.debug("陣列接通就緒。");
         }
     };
 
@@ -168,7 +168,7 @@ function bootstrapApp() {
 }
 
 document.getElementById('btn-resume').addEventListener('click', function() {
-    if (!isNostrReady) { alert("信令矩陣仍在同步中，請稍候。"); return; }
+    if (!isNostrReady) { alert("矩陣仍在同步中，請稍候。"); return; }
     const savedLastPk = Storage.getLastChatPk();
     if (!savedLastPk) return;
     
@@ -396,12 +396,12 @@ function updateOnlineStatus(isOnline) {
     if (isOnline) {
         dot.style.background = '#00FFCC';
         dot.style.boxShadow = '0 0 8px #00FFCC';
-        text.innerText = '🟢 P2P 直連管道打通 (SECURITY)';
+        text.innerText = '🟢 P2P SECURE';
         text.style.color = '#00FFCC';
     } else {
         dot.style.background = 'var(--warning)';
         dot.style.boxShadow = 'none';
-        text.innerText = '🔴 離線 (中記矩陣背景重連中...)';
+        text.innerText = '🔴 OFFLINE (RECONNECTING...)';
         text.style.color = 'var(--warning)';
     }
 }
