@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss://nos.lol wss://relay.damus.io wss://relay.primal.net wss://relay.nostr.band; img-src 'self' data:;">
-    <title>📟 P2P Chat StateMachine Engine v1.0</title>
+    <title>📟 P2P Chat Pool Engine v1.0.1</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+    <!-- 🟢 確保載入包含 SimplePool 的萬能整合包 -->
     <script src="https://unpkg.com/nostr-tools@1.17.0/lib/nostr.bundle.js"></script>
     
     <style>
@@ -46,7 +47,6 @@
         h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.025em; margin: 0 0 8px 0; color: #FFF; }
         .subtitle { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 24px; }
         
-        /* Relay 矩陣看板樣式 */
         .relay-board { background: #000; border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 24px; text-align: left; font-family: monospace; font-size: 0.75rem; }
         .relay-title { font-weight: bold; color: var(--text); margin-bottom: 6px; border-bottom: 1px solid #222; padding-bottom: 4px; }
         .relay-item { display: flex; align-items: center; justify-content: space-between; line-height: 1.6; color: var(--text-muted); }
@@ -84,7 +84,7 @@
         
         #chat-header { height: 56px; border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; justify-content: space-between; background: var(--bg); }
         .status-container { display: flex; align-items: center; gap: 8px; }
-        #status-text { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; }
+        .status-text { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; }
         #status-dot { width: 6px; height: 6px; border-radius: 50%; transition: all 0.3s; }
         
         #btn-leave { font-size: 0.8rem; color: var(--text-muted); cursor: pointer; background: transparent; border: none; width: auto; padding: 4px 8px; }
@@ -124,9 +124,8 @@
         <h1>📟 P2P Chat</h1>
         <div class="subtitle">去中心化・本地端對端加密通訊</div>
         
-        <!-- 💡 新增的動態信令狀態面板 -->
         <div class="relay-board">
-            <div class="relay-title">📡 信令中繼站矩陣 (Relay Matrix)</div>
+            <div class="relay-title">📡 信令中繼矩陣 (Relay Matrix)</div>
             <div class="relay-item"><span>nos.lol</span><span id="relay-0" class="relay-status fail">🔴 OFF</span></div>
             <div class="relay-item"><span>relay.damus.io</span><span id="relay-1" class="relay-status fail">🔴 OFF</span></div>
             <div class="relay-item"><span>relay.primal.net</span><span id="relay-2" class="relay-status fail">🔴 OFF</span></div>
@@ -134,7 +133,7 @@
         </div>
 
         <div class="btn-group">
-            <button id="btn-resume">恢復上一次的加密對話</button>
+            <button id="btn-resume">⏳ 恢復上一次的加密對話</button>
             <button id="btn-create">1. 產生邀請 QR Code</button>
             <button id="btn-scan">2. 掃描對方 QR Code</button>
         </div>
@@ -148,7 +147,7 @@
         <div id="chat-header">
             <div class="status-container">
                 <div id="status-dot"></div>
-                <span id="status-text">IDLE</span>
+                <span id="status-text" class="status-text">IDLE</span>
             </div>
             <button id="btn-leave">[ 離開對話 ]</button>
         </div>
@@ -159,9 +158,9 @@
         </div>
     </div>
 
-    <!-- 🟢 注入動態快取防鎖：Cache Busting 戳記 -->
+    <!-- 綠色 Cache Busting 戳記 -->
     <script type="module">
-        const versionStamp = "20260713-v1.0.1";
+        const versionStamp = "20260713-PoolStable";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>
