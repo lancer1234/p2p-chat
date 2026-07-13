@@ -100,7 +100,7 @@ function isValidSignalingSchema(data) {
 }
 
 document.getElementById('checkbox-show-pin').addEventListener('change', function(e) {
-    document.getElementById('input-pin').type = e.target.checked ? "text" : "password";
+    document.getElementById('pin-input').type = e.target.checked ? "text" : "password";
 });
 
 document.getElementById('btn-reset-identity').addEventListener('click', function() {
@@ -151,19 +151,13 @@ async function executeUnlockFlow() {
 document.getElementById('btn-unlock').addEventListener('click', executeUnlockFlow);
 
 function bootstrapApp() {
-    // 💡 異步聯動優化：傳入動態異步回呼，只要中繼站矩陣任一軌亮綠燈，立刻解鎖 READY 狀態閘門，免去 Promise 提前 Resolve 死鎖
-    const onAnyRelayConnectedTrigger = function() {
-        if (!isNostrReady) {
-            isNostrReady = true;
-            logger.debug("🌐 全球信令陣列接通就緒。");
-        }
-    };
-
-    nostr.connect(updateRelayUIIndicator, onAnyRelayConnectedTrigger).then(function() {
-        // 雙重校驗
+    // 💡 100% 修正：拿掉對事件 emitter 的依賴。Promise 陣列只要過驗成功，100% 解開 READY 閘門
+    nostr.connect(updateRelayUIIndicator).then(function() {
         isNostrReady = true;
+        logger.debug("🌐 全球信令陣列接通就緒。");
     }).catch(function(err) {
         console.error("Pool連線阻斷", err);
+        logger.debug("❌ 信令矩陣初始化失敗。");
     });
 }
 
@@ -401,7 +395,7 @@ function updateOnlineStatus(isOnline) {
     } else {
         dot.style.background = 'var(--warning)';
         dot.style.boxShadow = 'none';
-        text.innerText = '🔴 離線 (中繼矩陣背景重連中...)';
+        text.innerText = '🔴 離線 (中記矩陣背景重連中...)';
         text.style.color = 'var(--warning)';
     }
 }
