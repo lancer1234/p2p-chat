@@ -72,6 +72,24 @@ function refreshActiveRtcConfig() {
     rtcConfig = relayModeEnabled ? relayRtcConfig : directRtcConfig;
 }
 
+function resetRelayModeForDirectAttempt(reason, clearExpiredCredentials = false) {
+    relayModeEnabled = false;
+
+    if (clearExpiredCredentials) {
+        relayIceServers = [];
+        relayCredentialsExpiresAt = 0;
+        relayCredentialsPromise = null;
+        relayRtcConfig = { ...directRtcConfig };
+    }
+
+    refreshActiveRtcConfig();
+    setRelayFallbackVisible(false);
+    updateNetworkDetail(hasRelayBackend()
+        ? 'DIRECT P2P ONLY · RELAY ON-DEMAND'
+        : 'DIRECT P2P ONLY · TURN UNAVAILABLE');
+    logger.debug(`🟢 Relay mode 已重置；本次連線重新從 Direct P2P 開始 (${reason})。`);
+}
+
 function randomId() {
     const bytes = crypto.getRandomValues(new Uint8Array(12));
     return bytesToHex(bytes);
@@ -366,6 +384,10 @@ document.getElementById('btn-resume').addEventListener('click', function() {
     currentNegotiationId = null;
     reconnectAttempt = 0;
 
+    // 恢復舊對話永遠重新從 Direct P2P 開始。
+    // 曾經使用 TURN 只屬於上一個連線 session，不會成為這個對話的永久偏好。
+    resetRelayModeForDirectAttempt('resume', !relayCredentialsStillValid());
+
     transitionToState(STATE_CONNECTING);
     restoreChatLogs();
     listenForMessages(currentFriendPk);
@@ -506,6 +528,14 @@ async function enableEncryptedRelay(notifyPeer = false) {
 
 function createPeer({ initiator, signalType, negotiationId }) {
     forceDestroyPeer();
+
+    // TURN credential 過期後絕不拿舊 Relay 設定繼續重連。
+    // 先回到 Direct P2P；若仍被網路阻擋，再由使用者重新允許 Relay。
+    if (relayModeEnabled && !relayCredentialsStillValid()) {
+        resetRelayModeForDirectAttempt('turn-credential-expired', true);
+        appendMessage('TURN credential 已過期；已重新嘗試 Direct P2P。若仍無法直連，可再次手動啟用加密 Relay。', 'system');
+    }
+
     currentNegotiationId = negotiationId || randomId();
     refreshActiveRtcConfig();
     logger.debug(`🌐 建立 Peer：${relayModeEnabled ? 'ENCRYPTED RELAY ALLOWED' : 'DIRECT P2P ONLY'}`);
@@ -985,6 +1015,15 @@ function scheduleReconnect(reason, destroyFirst = false) {
 async function recoverAfterNetworkChange(reason) {
     if (!navigator.onLine) return;
     logger.debug(`📶 網路恢復/切換：${reason}`);
+
+    // 換網路後重新給 Direct P2P 一次機會。
+    // 例如機場 Wi-Fi 曾使用 TURN，回到家用 Wi-Fi 後不應繼續沿用 Relay。
+    if (relayModeEnabled && (reason === 'online' || reason === 'connection-change')) {
+        resetRelayModeForDirectAttempt(`network-${reason}`, false);
+        appendMessage('偵測到網路環境變更；已退出上一個 Relay session，重新優先嘗試 Direct P2P。', 'system');
+    } else if (relayModeEnabled && !relayCredentialsStillValid()) {
+        resetRelayModeForDirectAttempt(`expired-${reason}`, true);
+    }
 
     try {
         await nostr.refreshRelays();
