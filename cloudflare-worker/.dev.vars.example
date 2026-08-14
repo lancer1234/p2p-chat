@@ -1,0 +1,2 @@
+# Local development only. Copy to .dev.vars and keep it out of Git.
+METERED_SECRET_KEY=replace-with-your-regenerated-metered-secret-key
