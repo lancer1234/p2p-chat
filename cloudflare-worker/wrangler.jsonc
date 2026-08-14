@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "p2p-chat-turn",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-14",
+  "vars": {
+    "METERED_DOMAIN": "makoto.metered.live",
+    "TURN_TTL_SECONDS": "14400",
+    "ALLOWED_ORIGIN": "https://lancer1234.github.io"
+  }
+}
