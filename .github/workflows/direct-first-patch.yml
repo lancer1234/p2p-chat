@@ -1,0 +1,69 @@
+name: Apply direct-first relay patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/direct-first-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch app.js and cache stamp
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('js/app.js')
+          s = p.read_text()
+
+          old = """function refreshActiveRtcConfig() {\n    rtcConfig = relayModeEnabled ? relayRtcConfig : directRtcConfig;\n}\n"""
+          new = """function refreshActiveRtcConfig() {\n    rtcConfig = relayModeEnabled ? relayRtcConfig : directRtcConfig;\n}\n\nfunction resetRelayModeForDirectAttempt(reason, clearExpiredCredentials = false) {\n    relayModeEnabled = false;\n\n    if (clearExpiredCredentials) {\n        relayIceServers = [];\n        relayCredentialsExpiresAt = 0;\n        relayCredentialsPromise = null;\n        relayRtcConfig = { ...directRtcConfig };\n    }\n\n    refreshActiveRtcConfig();\n    setRelayFallbackVisible(false);\n    updateNetworkDetail(hasRelayBackend()\n        ? 'DIRECT P2P ONLY · RELAY ON-DEMAND'\n        : 'DIRECT P2P ONLY · TURN UNAVAILABLE');\n    logger.debug(`🟢 Relay mode 已重置；本次連線重新從 Direct P2P 開始 (${reason})。`);\n}\n"""
+          if old not in s:
+              raise SystemExit('refreshActiveRtcConfig anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = """    currentFriendPk = savedLastPk;\n    currentNegotiationId = null;\n    reconnectAttempt = 0;\n\n    transitionToState(STATE_CONNECTING);\n"""
+          new = """    currentFriendPk = savedLastPk;\n    currentNegotiationId = null;\n    reconnectAttempt = 0;\n\n    // 恢復舊對話永遠重新從 Direct P2P 開始。\n    // 曾經使用 TURN 只屬於上一個連線 session，不會成為這個對話的永久偏好。\n    resetRelayModeForDirectAttempt('resume', !relayCredentialsStillValid());\n\n    transitionToState(STATE_CONNECTING);\n"""
+          if old not in s:
+              raise SystemExit('resume anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = """function createPeer({ initiator, signalType, negotiationId }) {\n    forceDestroyPeer();\n    currentNegotiationId = negotiationId || randomId();\n    refreshActiveRtcConfig();\n"""
+          new = """function createPeer({ initiator, signalType, negotiationId }) {\n    forceDestroyPeer();\n\n    // TURN credential 過期後絕不拿舊 Relay 設定繼續重連。\n    // 先回到 Direct P2P；若仍被網路阻擋，再由使用者重新允許 Relay。\n    if (relayModeEnabled && !relayCredentialsStillValid()) {\n        resetRelayModeForDirectAttempt('turn-credential-expired', true);\n        appendMessage('TURN credential 已過期；已重新嘗試 Direct P2P。若仍無法直連，可再次手動啟用加密 Relay。', 'system');\n    }\n\n    currentNegotiationId = negotiationId || randomId();\n    refreshActiveRtcConfig();\n"""
+          if old not in s:
+              raise SystemExit('createPeer anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = """async function recoverAfterNetworkChange(reason) {\n    if (!navigator.onLine) return;\n    logger.debug(`📶 網路恢復/切換：${reason}`);\n\n    try {\n"""
+          new = """async function recoverAfterNetworkChange(reason) {\n    if (!navigator.onLine) return;\n    logger.debug(`📶 網路恢復/切換：${reason}`);\n\n    // 換網路後重新給 Direct P2P 一次機會。\n    // 例如機場 Wi-Fi 曾使用 TURN，回到家用 Wi-Fi 後不應繼續沿用 Relay。\n    if (relayModeEnabled && (reason === 'online' || reason === 'connection-change')) {\n        resetRelayModeForDirectAttempt(`network-${reason}`, false);\n        appendMessage('偵測到網路環境變更；已退出上一個 Relay session，重新優先嘗試 Direct P2P。', 'system');\n    } else if (relayModeEnabled && !relayCredentialsStillValid()) {\n        resetRelayModeForDirectAttempt(`expired-${reason}`, true);\n    }\n\n    try {\n"""
+          if old not in s:
+              raise SystemExit('network recovery anchor not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+
+          idx = Path('index.html')
+          t = idx.read_text()
+          t = t.replace('20260814-GitHubPages-Worker-v16b', '20260814-GitHubPages-Worker-v17-direct-first')
+          idx.write_text(t)
+
+      - name: Syntax check
+        run: node --check js/app.js
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add js/app.js index.html
+          git commit -m "Make restored chats direct-P2P first" || exit 0
+          git push
