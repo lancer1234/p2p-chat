@@ -66,6 +66,29 @@
         .btn-danger-link { background: transparent; border: none; color: var(--text-muted); font-size: 0.8rem; cursor: pointer; text-decoration: underline; margin-top: 8px; padding: 8px; }
         .btn-danger-link:hover { color: var(--danger); }
         
+        .conversation-section { margin: 18px 0 14px; text-align: left; }
+        .conversation-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding: 0 2px; }
+        .conversation-title { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.08em; color: var(--text-muted); text-transform: uppercase; }
+        #chat-count { font-family: monospace; font-size: 0.7rem; color: var(--text-muted); }
+        #chat-list { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #0D0D10; }
+        .chat-empty { padding: 24px 14px; text-align: center; color: var(--text-muted); font-size: 0.78rem; line-height: 1.55; }
+        .chat-row { display: flex; align-items: center; min-height: 66px; border-bottom: 1px solid var(--border); background: transparent; }
+        .chat-row:last-child { border-bottom: none; }
+        .chat-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 11px 10px 11px 12px; border: 0; border-radius: 0; background: transparent; text-align: left; }
+        .chat-open:active { background: var(--panel); }
+        .chat-avatar { width: 34px; height: 34px; flex: 0 0 34px; border: 1px solid #2D2D32; border-radius: 50%; display: grid; place-items: center; color: var(--accent); font-family: monospace; font-size: 0.72rem; background: var(--panel); }
+        .chat-main { min-width: 0; flex: 1; }
+        .chat-topline { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+        .chat-name { color: var(--text); font-size: 0.9rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .chat-time { flex: 0 0 auto; color: var(--text-muted); font-size: 0.66rem; font-family: monospace; }
+        .chat-preview { margin-top: 4px; color: var(--text-muted); font-size: 0.76rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .chat-delete { width: auto; flex: 0 0 auto; border: 0; border-left: 1px solid var(--border); border-radius: 0; background: transparent; color: #3F3F46; padding: 22px 12px; font-size: 0.9rem; }
+        .chat-delete:hover { color: var(--danger); }
+        #btn-new-chat { margin-top: 10px; border-color: rgba(0,255,204,0.35); color: var(--accent); }
+        #pair-actions { display: none; margin-top: 10px; gap: 8px; }
+        #pair-actions button { padding: 12px; font-size: 0.82rem; }
+        #chat-peer-name { font-size: 0.72rem; color: var(--text); font-weight: 600; max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
         #reader { width: 100%; max-width: 320px; margin: 20px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: none; }
         #qrcode-container { margin: 20px auto; width: 85vw; max-width: 340px; background: #FFF; padding: 24px; border-radius: 16px; display: none; box-shadow: 0 20px 40px rgba(0,0,0,0.6); text-align: center; }
         #qrcode-container h3 { color: #0A0A0C; font-size: 0.85rem; font-weight: 600; margin: 0 0 16px 0; }
@@ -137,10 +160,17 @@
             <div class="relay-item"><span>relay.nostr.band</span><span id="relay-3" class="relay-status fail">⏳ SYNC</span></div>
         </div>
 
-        <div class="btn-group">
-            <button id="btn-resume">恢復上一次的加密對話</button>
-            <button id="btn-create">1. 產生邀請 QR Code</button>
-            <button id="btn-scan">2. 掃描對方 QR Code</button>
+        <div class="conversation-section">
+            <div class="conversation-heading">
+                <span class="conversation-title">對話</span>
+                <span id="chat-count">0</span>
+            </div>
+            <div id="chat-list"></div>
+            <button id="btn-new-chat">＋ 新增對話</button>
+            <div id="pair-actions" class="btn-group">
+                <button id="btn-create">產生邀請 QR Code</button>
+                <button id="btn-scan">掃描對方 QR Code</button>
+            </div>
         </div>
         <div id="debug-console">系統初始化中...</div>
     </div>
@@ -153,11 +183,12 @@
             <div class="status-container">
                 <div id="status-dot"></div>
                 <div class="status-stack">
+                    <span id="chat-peer-name">對話</span>
                     <span id="status-text" class="status-text">IDLE</span>
                     <span id="network-detail">ICE: INITIALIZING</span>
                 </div>
             </div>
-            <button id="btn-leave">[ 離開對話 ]</button>
+            <button id="btn-leave">[ 返回 ]</button>
         </div>
         <div id="chat-messages"></div>
         <div id="relay-fallback-bar">
@@ -171,7 +202,7 @@
     </div>
 
     <script type="module">
-        const versionStamp = "20260814-GitHubPages-Worker-v17-direct-first";
+        const versionStamp = "20260814-v18-multi-chat";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>

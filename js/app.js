@@ -131,14 +131,16 @@ function transitionToState(nextState) {
         document.getElementById('pin-container').style.display = 'block';
     } else if (nextState === STATE_READY) {
         document.getElementById('setup-container').style.display = 'block';
-        const savedLastPk = Storage.getLastChatPk();
-        document.getElementById('btn-resume').style.display = savedLastPk ? 'block' : 'none';
+        renderChatList();
+        const pairActions = document.getElementById('pair-actions');
+        if (pairActions) pairActions.style.display = 'none';
     } else if (nextState === STATE_CREATE_QR) {
         document.getElementById('qrcode-container').style.display = 'block';
     } else if (nextState === STATE_SCAN_QR) {
         document.getElementById('reader').style.display = 'block';
     } else if (nextState === STATE_CONNECTING || nextState === STATE_CONNECTED) {
         document.getElementById('chat-interface').style.display = 'flex';
+        updateCurrentPeerLabel();
         updateOnlineStatus(nextState === STATE_CONNECTED);
     }
 }
@@ -369,35 +371,143 @@ function bootstrapApp() {
         });
 }
 
-document.getElementById('btn-resume').addEventListener('click', function() {
+function formatChatTime(timestamp) {
+    if (!timestamp) return '';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const sameDay = date.toDateString() === now.toDateString();
+    if (sameDay) return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const diff = now.getTime() - date.getTime();
+    if (diff < 7 * 24 * 60 * 60 * 1000) return date.toLocaleDateString([], { weekday: 'short' });
+    return date.toLocaleDateString([], { month: 'numeric', day: 'numeric' });
+}
+
+function getFriendDisplayName(friendPk) {
+    const friend = Storage.getFriends()[friendPk];
+    return friend?.name || `聯絡人 ${String(friendPk || '').slice(0, 8)}`;
+}
+
+function updateCurrentPeerLabel() {
+    const el = document.getElementById('chat-peer-name');
+    if (!el) return;
+    el.innerText = currentFriendPk ? getFriendDisplayName(currentFriendPk) : '對話';
+}
+
+function renderChatList() {
+    const list = document.getElementById('chat-list');
+    const count = document.getElementById('chat-count');
+    if (!list) return;
+    const chats = Storage.getChatList();
+    if (count) count.innerText = String(chats.length);
+    list.innerHTML = '';
+
+    if (chats.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'chat-empty';
+        empty.innerText = '目前沒有對話\n按「＋ 新增對話」開始配對';
+        list.appendChild(empty);
+        return;
+    }
+
+    chats.forEach(chat => {
+        const row = document.createElement('div');
+        row.className = 'chat-row';
+        const open = document.createElement('button');
+        open.className = 'chat-open';
+        open.dataset.pk = chat.pk;
+        const avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        avatar.innerText = chat.pk.slice(0, 2).toUpperCase();
+        const main = document.createElement('div');
+        main.className = 'chat-main';
+        const top = document.createElement('div');
+        top.className = 'chat-topline';
+        const name = document.createElement('span');
+        name.className = 'chat-name';
+        name.innerText = chat.name;
+        const time = document.createElement('span');
+        time.className = 'chat-time';
+        time.innerText = formatChatTime(chat.updatedAt);
+        top.append(name, time);
+        const preview = document.createElement('div');
+        preview.className = 'chat-preview';
+        preview.innerText = chat.lastMessage || '尚無訊息';
+        main.append(top, preview);
+        open.append(avatar, main);
+        const del = document.createElement('button');
+        del.className = 'chat-delete';
+        del.dataset.deletePk = chat.pk;
+        del.setAttribute('aria-label', '刪除對話');
+        del.innerText = '×';
+        row.append(open, del);
+        list.appendChild(row);
+    });
+}
+
+function openConversation(friendPk) {
+    if (!isValidPubkey(friendPk)) return;
     if (!isNostrReady) {
         alert('矩陣仍在同步中，請稍候。');
         return;
     }
-
-    const savedLastPk = Storage.getLastChatPk();
-    if (!isValidPubkey(savedLastPk)) return;
-
-    clearPeerTimers();
-    forceDestroyPeer();
-    currentFriendPk = savedLastPk;
+    clearSessionState();
+    currentFriendPk = friendPk;
     currentNegotiationId = null;
     reconnectAttempt = 0;
-
-    // 恢復舊對話永遠重新從 Direct P2P 開始。
-    // 曾經使用 TURN 只屬於上一個連線 session，不會成為這個對話的永久偏好。
-    resetRelayModeForDirectAttempt('resume', !relayCredentialsStillValid());
-
+    Storage.touchFriend(friendPk);
+    resetRelayModeForDirectAttempt('open-conversation', !relayCredentialsStillValid());
+    updateCurrentPeerLabel();
     transitionToState(STATE_CONNECTING);
     restoreChatLogs();
     listenForMessages(currentFriendPk);
-    beginReconnectIfLeader('resume');
+    beginReconnectIfLeader('chat-list-open');
+}
+
+async function returnToChatList() {
+    const leavingPk = currentFriendPk;
+    if (leavingPk && isNostrReady) {
+        try {
+            const encrypted = await encodeSignaling(leavingPk, { type: 'leave', negotiationId: currentNegotiationId });
+            await nostr.sendEvent(myKeyPair.sk, leavingPk, encrypted);
+        } catch (error) {
+            logger.error('leave signaling 發送失敗', error);
+        }
+    }
+    clearSessionState();
+    currentFriendPk = null;
+    updateCurrentPeerLabel();
+    transitionToState(STATE_READY);
+}
+
+function deleteConversation(friendPk) {
+    if (!isValidPubkey(friendPk)) return;
+    const name = getFriendDisplayName(friendPk);
+    if (!confirm(`刪除「${name}」？\n\n本機聊天紀錄也會一起刪除。`)) return;
+    Storage.clearSession(friendPk);
+    renderChatList();
+}
+
+document.getElementById('chat-list').addEventListener('click', function(event) {
+    const deleteButton = event.target.closest('[data-delete-pk]');
+    if (deleteButton) {
+        event.stopPropagation();
+        deleteConversation(deleteButton.dataset.deletePk);
+        return;
+    }
+    const openButton = event.target.closest('[data-pk]');
+    if (openButton) openConversation(openButton.dataset.pk);
+});
+
+document.getElementById('btn-new-chat').addEventListener('click', function() {
+    const actions = document.getElementById('pair-actions');
+    if (!actions) return;
+    actions.style.display = actions.style.display === 'flex' ? 'none' : 'flex';
 });
 
 document.getElementById('btn-create').addEventListener('click', startAsQrOwner);
 document.getElementById('btn-scan').addEventListener('click', startCameraScan);
 document.getElementById('btn-send').addEventListener('click', sendMessage);
-document.getElementById('btn-leave').addEventListener('click', leaveChat);
+document.getElementById('btn-leave').addEventListener('click', returnToChatList);
 document.getElementById('btn-use-relay').addEventListener('click', async function() {
     if (!currentFriendPk) return;
     if (!hasRelayBackend()) {
@@ -679,7 +789,7 @@ function listenForMessages(friendPk) {
             if (!data) return;
 
             if (data.type === 'leave') {
-                appendMessage('對方已離開對話。', 'system');
+                appendMessage('對方目前未開啟此對話。', 'system');
                 forceDestroyPeer();
                 transitionToState(STATE_CONNECTING);
                 return;
@@ -816,27 +926,6 @@ function updateOnlineStatus(isOnline) {
         text.innerText = '🟠 OFFLINE (RECONNECTING...)';
         text.style.color = 'var(--warning)';
     }
-}
-
-async function leaveChat() {
-    if (!confirm('確定要終止並離開對話？這將會徹底抹除本地的所有對話紀錄。')) return;
-
-    if (currentFriendPk && isNostrReady) {
-        try {
-            const encrypted = await encodeSignaling(currentFriendPk, {
-                type: 'leave',
-                negotiationId: currentNegotiationId
-            });
-            await nostr.sendEvent(myKeyPair.sk, currentFriendPk, encrypted);
-        } catch (error) {
-            logger.error('leave signaling 發送失敗', error);
-        }
-    }
-
-    if (currentFriendPk) Storage.clearSession(currentFriendPk);
-    clearSessionState();
-    currentFriendPk = null;
-    transitionToState(STATE_READY);
 }
 
 function setupPeerEvents() {
