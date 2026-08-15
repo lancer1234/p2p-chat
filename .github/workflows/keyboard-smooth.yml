@@ -1,0 +1,29 @@
+name: Apply keyboard smoothness patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Apply patch
+        run: python .github/keyboard_smooth_patch.py
+      - name: Commit changes
+        run: |
+          git config user.name "Danny"
+          git config user.email "danny950811@gmail.com"
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m "Smooth mobile keyboard viewport transitions"
+          git push
