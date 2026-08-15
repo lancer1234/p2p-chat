@@ -2,28 +2,31 @@ name: Apply responsive layout
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: ${{ github.event.head_commit.message != 'Make chat layout responsive' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
       - name: Patch responsive CSS
+        shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           p = Path('index.html')
           s = p.read_text()
-          s = s.replace("display: none; width: 100%; max-width: 600px; height: 100dvh; background: var(--bg);", "display: none; width: 100%; max-width: 1000px; height: 100dvh; background: var(--bg);", 1)
-          marker = "    </style>"
-          css = r'''
+          if '20260815-v19-responsive' in s:
+              raise SystemExit(0)
+          s = s.replace('display: none; width: 100%; max-width: 600px; height: 100dvh; background: var(--bg);', 'display: none; width: 100%; max-width: 1000px; height: 100dvh; background: var(--bg);', 1)
+          marker = '    </style>'
+          css = '''
 
         /* Responsive layout */
         @media (max-width: 767px) {
@@ -70,15 +73,16 @@ jobs:
 '''
           if marker not in s:
               raise SystemExit('style marker not found')
-          s = s.replace(marker, css + "\n" + marker, 1)
+          s = s.replace(marker, css + '\n' + marker, 1)
           s = s.replace('20260814-v18-multi-chat', '20260815-v19-responsive', 1)
           p.write_text(s)
           PY
       - name: Commit changes
+        shell: bash
         run: |
-          git config user.name "Danny"
-          git config user.email "danny950811@gmail.com"
+          git config user.name Danny
+          git config user.email danny950811@gmail.com
           git add index.html
-          git diff --cached --quiet && exit 0
-          git commit -m "Make chat layout responsive"
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Make chat layout responsive'
           git push
