@@ -177,7 +177,6 @@ function normalizeSignalingPackage(data) {
         negotiationId: data.negotiationId || null
     };
 }
-
 function isFreshSignalingPackage(data) {
     if (!data || !data.sentAt) return true;
     return Math.abs(Date.now() - data.sentAt) <= APP_CONFIG.signalingMaxAgeMs;
@@ -611,6 +610,11 @@ function subscribeBackgroundSession(friendPk) {
             }
 
             if (data.type === 'leave') {
+                if (data.negotiationId && session.negotiationId &&
+                    data.negotiationId !== session.negotiationId) {
+                    logger.debug(`↩️ 忽略舊背景 leave：${friendPk.slice(0, 8)}`);
+                    return;
+                }
                 destroyBackgroundPeer(session);
                 session.attempt += 1;
                 scheduleBackgroundReconnect(friendPk, 'peer-left');
@@ -897,7 +901,6 @@ function createPeer({ initiator, signalType, negotiationId }) {
     armPeerAttemptTimeout(initiator ? '主動 ICE negotiation' : '被動 ICE negotiation');
     return p2pPeer;
 }
-
 async function handleIncomingQrPairSignal(rawContent, authorPk) {
     if (currentSystemState !== STATE_CREATE_QR || !isValidPubkey(authorPk)) return;
     if (p2pPeer && p2pPeer.connected) return;
@@ -1018,9 +1021,15 @@ function listenForMessages(friendPk) {
             if (!data) return;
 
             if (data.type === 'leave') {
-                appendMessage('對方目前未開啟此對話。', 'system');
+                if (data.negotiationId && currentNegotiationId &&
+                    data.negotiationId !== currentNegotiationId) {
+                    logger.debug('↩️ 忽略舊 session leave signaling。');
+                    return;
+                }
+                appendMessage('對方已切換對話狀態，正在重新建立 Direct P2P。', 'system');
                 forceDestroyPeer();
                 transitionToState(STATE_CONNECTING);
+                scheduleReconnect('peer-left');
                 return;
             }
 
