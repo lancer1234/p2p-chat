@@ -1,0 +1,24 @@
+name: Apply iOS proxy input workaround
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python .github/ios_proxy_input_patch.py
+      - run: |
+          git config user.name "Danny"
+          git config user.email "danny950811@gmail.com"
+          git add index.html js/app.js
+          git diff --cached --quiet && exit 0
+          git commit -m "Work around iOS keyboard viewport shift"
+          git push
