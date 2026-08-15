@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' https://cdnjs.cloudflare.com unpkg.com 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.metered.live https://p2p-chat-turn.danny950811.workers.dev wss://nos.lol wss://relay.damus.io wss://relay.primal.net wss://relay.nostr.band; img-src 'self' data:;">
     <title>📟 P2P Chat Pool Engine v1.3</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
@@ -181,7 +181,7 @@
         @media (max-width: 767px) {
             #pin-container, #setup-container { max-width: 420px; padding-left: 18px; padding-right: 18px; }
             #chat-header { padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right)); }
-            #chat-messages { padding: 16px 14px; gap: 12px; }
+            #chat-messages { padding: 16px 14px calc(16px + var(--keyboard-height)); gap: 12px; }
             .msg { max-width: 84%; }
             #chat-input-area { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); gap: 8px; }
             #network-detail { max-width: 58vw; }
@@ -348,7 +348,7 @@
     </script>
 
     <script type="module">
-        const versionStamp = "20260815-v23-keyboard-inset";
+        const versionStamp = "20260815-v24-keyboard-stable";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>
