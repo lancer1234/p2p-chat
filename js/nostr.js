@@ -78,7 +78,7 @@ export class NostrManager {
         if (changed || this.onStatusChange) {
           if (this.onStatusChange) this.onStatusChange(index, connected);
         }
-        if (connected && this.onAnyRelayConnected) {
+        if (connected && changed && this.onAnyRelayConnected) {
           this.onAnyRelayConnected(url, index);
         }
         return connected;

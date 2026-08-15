@@ -584,7 +584,8 @@ function createBackgroundPeer(friendPk, { initiator, signalType, negotiationId }
 
 function subscribeBackgroundSession(friendPk) {
     const session = getBackgroundSession(friendPk);
-    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
+    if (session.subscribed) return;
+    const subscribed = nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
         if (authorPk !== friendPk || !rawContent || rawContent.length > 100000) return;
         if (currentFriendPk === friendPk && currentSystemState !== STATE_READY) return;
         try {
@@ -618,7 +619,7 @@ function subscribeBackgroundSession(friendPk) {
             logger.error('背景 signaling 處理失敗', error);
         }
     });
-    session.subscribed = true;
+    session.subscribed = !!subscribed;
 }
 
 function startBackgroundSession(friendPk, reason = 'background-start') {
