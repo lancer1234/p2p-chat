@@ -115,7 +115,7 @@
             background: var(--bg);
             flex-direction: column;
             position: fixed;
-            top: var(--app-top);
+            top: 0;
             left: 0;
             right: 0;
             transform: none;
@@ -272,15 +272,12 @@
             const messages = document.getElementById('chat-messages');
             let viewportRaf = 0;
             let lastHeight = 0;
-            let lastTop = 0;
 
             function applyViewport() {
                 viewportRaf = 0;
                 const vv = window.visualViewport;
                 const height = Math.round(vv ? vv.height : window.innerHeight);
-                const top = Math.round(vv ? vv.offsetTop : 0);
-
-                if (height === lastHeight && top === lastTop) return;
+                if (height === lastHeight) return;
 
                 const bottomGap = messages
                     ? Math.max(0, messages.scrollHeight - messages.scrollTop - messages.clientHeight)
@@ -288,9 +285,7 @@
                 const keepAtBottom = document.activeElement === input && bottomGap < 96;
 
                 lastHeight = height;
-                lastTop = top;
                 root.style.setProperty('--app-height', `${height}px`);
-                root.style.setProperty('--app-top', `${top}px`);
 
                 if (keepAtBottom && messages) {
                     requestAnimationFrame(function() {
@@ -324,7 +319,7 @@
     </script>
 
     <script type="module">
-        const versionStamp = "20260815-v21-smooth-keyboard";
+        const versionStamp = "20260815-v22-ios-offset-fix";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>
