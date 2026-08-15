@@ -270,43 +270,61 @@
             const root = document.documentElement;
             const input = document.getElementById('input-msg');
             const messages = document.getElementById('chat-messages');
+            let viewportRaf = 0;
+            let lastHeight = 0;
+            let lastTop = 0;
 
-            function syncViewport() {
+            function applyViewport() {
+                viewportRaf = 0;
                 const vv = window.visualViewport;
-                const height = vv ? vv.height : window.innerHeight;
-                const top = vv ? vv.offsetTop : 0;
-                root.style.setProperty('--app-height', `${Math.round(height)}px`);
-                root.style.setProperty('--app-top', `${Math.round(top)}px`);
+                const height = Math.round(vv ? vv.height : window.innerHeight);
+                const top = Math.round(vv ? vv.offsetTop : 0);
 
-                if (document.activeElement === input && messages) {
+                if (height === lastHeight && top === lastTop) return;
+
+                const bottomGap = messages
+                    ? Math.max(0, messages.scrollHeight - messages.scrollTop - messages.clientHeight)
+                    : 0;
+                const keepAtBottom = document.activeElement === input && bottomGap < 96;
+
+                lastHeight = height;
+                lastTop = top;
+                root.style.setProperty('--app-height', `${height}px`);
+                root.style.setProperty('--app-top', `${top}px`);
+
+                if (keepAtBottom && messages) {
                     requestAnimationFrame(function() {
-                        messages.scrollTop = messages.scrollHeight;
+                        messages.scrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight - bottomGap);
                     });
                 }
             }
 
-            syncViewport();
-            window.addEventListener('resize', syncViewport, { passive: true });
-            window.addEventListener('orientationchange', syncViewport, { passive: true });
+            function scheduleViewportSync() {
+                if (viewportRaf) return;
+                viewportRaf = requestAnimationFrame(applyViewport);
+            }
+
+            scheduleViewportSync();
+            window.addEventListener('resize', scheduleViewportSync, { passive: true });
+            window.addEventListener('orientationchange', scheduleViewportSync, { passive: true });
 
             if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', syncViewport, { passive: true });
-                window.visualViewport.addEventListener('scroll', syncViewport, { passive: true });
+                window.visualViewport.addEventListener('resize', scheduleViewportSync, { passive: true });
+                window.visualViewport.addEventListener('scroll', scheduleViewportSync, { passive: true });
             }
 
             input.addEventListener('focus', function() {
-                setTimeout(syncViewport, 50);
-                setTimeout(syncViewport, 250);
+                scheduleViewportSync();
             });
 
             input.addEventListener('blur', function() {
-                setTimeout(syncViewport, 50);
+                scheduleViewportSync();
             });
         })();
     </script>
 
     <script type="module">
-        const versionStamp = "20260815-v20-fullscreen-keyboard";
+        const versionStamp = "20260815-v21-smooth-keyboard";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>
