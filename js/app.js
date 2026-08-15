@@ -1375,8 +1375,83 @@ if (navigator.connection && typeof navigator.connection.addEventListener === 'fu
     });
 }
 
-document.addEventListener('visibilitychange', function() {
-    if (!document.hidden && navigator.onLine && currentFriendPk && currentSystemState === STATE_CONNECTING) {
-        recoverAfterNetworkChange('foreground');
+let appHiddenAt = 0;
+let foregroundRecoveryTimer = null;
+
+function peerConnectionLooksHealthy(peer) {
+    if (!peer || peer.destroyed || !peer.connected) return false;
+    const pc = getPeerConnection(peer);
+    if (!pc) return !!peer.connected;
+    const ice = pc.iceConnectionState;
+    const state = pc.connectionState;
+    return (ice === 'connected' || ice === 'completed') &&
+        (!state || state === 'connected');
+}
+
+function restartStaleBackgroundConnections() {
+    for (const [friendPk, session] of backgroundSessions) {
+        if (currentFriendPk === friendPk && currentSystemState !== STATE_READY) continue;
+        if (peerConnectionLooksHealthy(session.peer)) continue;
+        destroyBackgroundPeer(session);
+        session.attempt = 0;
+        startBackgroundSession(friendPk, 'foreground-resume');
     }
+}
+
+async function recoverAfterForeground() {
+    if (!navigator.onLine) return;
+    const hiddenForMs = appHiddenAt ? Date.now() - appHiddenAt : 0;
+    logger.debug(`📱 App 回到前景；背景約 ${Math.round(hiddenForMs / 100) / 10}s。`);
+
+    try {
+        await nostr.refreshRelays();
+        isNostrReady = nostr.hasLiveRelay();
+    } catch (_) {
+        isNostrReady = false;
+    }
+
+    if (!isNostrReady) {
+        logger.debug('🟠 回到前景後暫無 Nostr relay，等待 health monitor 恢復。');
+        return;
+    }
+
+    restartStaleBackgroundConnections();
+    startAllBackgroundConnections();
+
+    if (!currentFriendPk || currentSystemState === STATE_READY ||
+        currentSystemState === STATE_CREATE_QR || currentSystemState === STATE_SCAN_QR) return;
+
+    // iOS 可能在背景凍結連線但沒有及時觸發 close/error。
+    // 回到前景時直接檢查底層 ICE/PC，而不是只相信 SimplePeer.connected。
+    if (peerConnectionLooksHealthy(p2pPeer)) {
+        listenForMessages(currentFriendPk);
+        transitionToState(STATE_CONNECTED);
+        return;
+    }
+
+    transitionToState(STATE_CONNECTING);
+    listenForMessages(currentFriendPk);
+    scheduleReconnect('foreground-resume', true);
+}
+
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+        appHiddenAt = Date.now();
+        return;
+    }
+
+    if (!navigator.onLine) return;
+    if (foregroundRecoveryTimer) clearTimeout(foregroundRecoveryTimer);
+    foregroundRecoveryTimer = setTimeout(function() {
+        foregroundRecoveryTimer = null;
+        recoverAfterForeground();
+    }, 120);
+});
+
+// iOS 有時 pageshow / focus 先於或取代 visibilitychange。
+window.addEventListener('pageshow', function() {
+    if (!document.hidden && navigator.onLine) recoverAfterForeground();
+});
+window.addEventListener('focus', function() {
+    if (!document.hidden && navigator.onLine) recoverAfterForeground();
 });
