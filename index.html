@@ -21,7 +21,7 @@
             --danger: #EF4444;
             --warning: #F59E0B;
             --app-height: 100dvh;
-            --app-top: 0px;
+            --keyboard-height: 0px;
         }
 
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -111,7 +111,7 @@
             display: none;
             width: 100vw;
             max-width: none;
-            height: var(--app-height);
+            height: 100dvh;
             background: var(--bg);
             flex-direction: column;
             position: fixed;
@@ -151,6 +151,7 @@
             overscroll-behavior: contain;
             -webkit-overflow-scrolling: touch;
             padding: 24px clamp(16px, 3vw, 48px);
+            padding-bottom: calc(24px + var(--keyboard-height));
             display: flex;
             flex-direction: column;
             gap: 16px;
@@ -169,6 +170,8 @@
             align-items: center;
             background: var(--bg);
             gap: 12px;
+            transform: translateY(calc(-1 * var(--keyboard-height)));
+            will-change: transform;
         }
         #input-msg { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--border); padding: 12px 16px; color: #FFF; font-size: 16px; border-radius: 20px; }
         #input-msg:focus { outline: none; border-color: rgba(0, 255, 204, 0.4); }
@@ -270,56 +273,81 @@
             const root = document.documentElement;
             const input = document.getElementById('input-msg');
             const messages = document.getElementById('chat-messages');
-            let viewportRaf = 0;
-            let lastHeight = 0;
+            let raf = 0;
+            let baseHeight = window.innerHeight;
+            let lastKeyboardHeight = -1;
 
-            function applyViewport() {
-                viewportRaf = 0;
+            function isInputFocused() {
+                return document.activeElement === input;
+            }
+
+            function measure() {
+                raf = 0;
                 const vv = window.visualViewport;
-                const height = Math.round(vv ? vv.height : window.innerHeight);
-                if (height === lastHeight) return;
+                const visibleHeight = vv ? vv.height : window.innerHeight;
+
+                if (!isInputFocused()) {
+                    baseHeight = Math.max(window.innerHeight, visibleHeight);
+                }
+
+                let keyboardHeight = 0;
+                if (isInputFocused()) {
+                    keyboardHeight = Math.max(0, Math.round(baseHeight - visibleHeight));
+                    if (keyboardHeight < 120) keyboardHeight = 0;
+                }
+
+                if (keyboardHeight === lastKeyboardHeight) return;
 
                 const bottomGap = messages
                     ? Math.max(0, messages.scrollHeight - messages.scrollTop - messages.clientHeight)
                     : 0;
-                const keepAtBottom = document.activeElement === input && bottomGap < 96;
+                const keepAtBottom = bottomGap < 96;
 
-                lastHeight = height;
-                root.style.setProperty('--app-height', `${height}px`);
+                lastKeyboardHeight = keyboardHeight;
+                root.style.setProperty('--keyboard-height', `${keyboardHeight}px`);
 
-                if (keepAtBottom && messages) {
+                if (messages && keepAtBottom) {
                     requestAnimationFrame(function() {
                         messages.scrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight - bottomGap);
                     });
                 }
             }
 
-            function scheduleViewportSync() {
-                if (viewportRaf) return;
-                viewportRaf = requestAnimationFrame(applyViewport);
+            function schedule() {
+                if (raf) return;
+                raf = requestAnimationFrame(measure);
             }
 
-            scheduleViewportSync();
-            window.addEventListener('resize', scheduleViewportSync, { passive: true });
-            window.addEventListener('orientationchange', scheduleViewportSync, { passive: true });
+            window.addEventListener('resize', schedule, { passive: true });
+            window.addEventListener('orientationchange', function() {
+                baseHeight = window.innerHeight;
+                schedule();
+            }, { passive: true });
 
             if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', scheduleViewportSync, { passive: true });
-                window.visualViewport.addEventListener('scroll', scheduleViewportSync, { passive: true });
+                window.visualViewport.addEventListener('resize', schedule, { passive: true });
+                window.visualViewport.addEventListener('scroll', schedule, { passive: true });
             }
 
             input.addEventListener('focus', function() {
-                scheduleViewportSync();
+                baseHeight = Math.max(baseHeight, window.innerHeight, window.visualViewport ? window.visualViewport.height : 0);
+                schedule();
             });
 
             input.addEventListener('blur', function() {
-                scheduleViewportSync();
+                lastKeyboardHeight = 0;
+                root.style.setProperty('--keyboard-height', '0px');
+                requestAnimationFrame(function() {
+                    baseHeight = window.innerHeight;
+                });
             });
+
+            measure();
         })();
     </script>
 
     <script type="module">
-        const versionStamp = "20260815-v22-ios-offset-fix";
+        const versionStamp = "20260815-v23-keyboard-inset";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>
