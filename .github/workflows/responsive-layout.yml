@@ -1,0 +1,84 @@
+name: Apply responsive layout
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'Make chat layout responsive'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch responsive CSS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text()
+          s = s.replace("display: none; width: 100%; max-width: 600px; height: 100dvh; background: var(--bg);", "display: none; width: 100%; max-width: 1000px; height: 100dvh; background: var(--bg);", 1)
+          marker = "    </style>"
+          css = r'''
+
+        /* Responsive layout */
+        @media (max-width: 767px) {
+            #pin-container, #setup-container { max-width: 420px; padding-left: 18px; padding-right: 18px; }
+            #chat-interface { width: 100vw; max-width: none; }
+            #chat-header { padding: 0 14px; }
+            #chat-messages { padding: 16px 14px; gap: 12px; }
+            .msg { max-width: 84%; }
+            #chat-input-area { padding-left: 12px; padding-right: 12px; gap: 8px; }
+            #network-detail { max-width: 58vw; }
+        }
+
+        @media (min-width: 768px) and (max-width: 1099px) {
+            #pin-container, #setup-container { max-width: 480px; }
+            #debug-console { max-width: none; }
+            #chat-interface { width: min(88vw, 760px); max-width: 760px; }
+            #chat-header { padding: 0 22px; }
+            #chat-messages { padding: 22px 24px; }
+            .msg { max-width: 72%; }
+            #chat-input-area { padding-left: 20px; padding-right: 20px; }
+        }
+
+        @media (min-width: 1100px) and (max-width: 1599px) {
+            #pin-container, #setup-container { max-width: 520px; }
+            #debug-console { max-width: none; }
+            #chat-interface { width: min(72vw, 900px); max-width: 900px; }
+            #chat-header { padding: 0 26px; }
+            #chat-messages { padding: 24px 28px; }
+            .msg { max-width: 66%; }
+            #chat-input-area { padding-left: 24px; padding-right: 24px; }
+            #network-detail { max-width: 520px; }
+        }
+
+        @media (min-width: 1600px) {
+            #pin-container, #setup-container { max-width: 560px; }
+            #debug-console { max-width: none; }
+            #chat-interface { width: min(68vw, 1000px); max-width: 1000px; }
+            #chat-header { padding: 0 30px; }
+            #chat-messages { padding: 28px 32px; }
+            .msg { max-width: 60%; }
+            #chat-input-area { padding-left: 28px; padding-right: 28px; }
+            #network-detail { max-width: 600px; }
+        }
+'''
+          if marker not in s:
+              raise SystemExit('style marker not found')
+          s = s.replace(marker, css + "\n" + marker, 1)
+          s = s.replace('20260814-v18-multi-chat', '20260815-v19-responsive', 1)
+          p.write_text(s)
+          PY
+      - name: Commit changes
+        run: |
+          git config user.name "Danny"
+          git config user.email "danny950811@gmail.com"
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m "Make chat layout responsive"
+          git push
