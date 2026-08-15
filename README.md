@@ -52,3 +52,6 @@ Copyright © 2026 lancer1234. All rights reserved.
 本專案原始碼即使可於 GitHub 查看，也不代表授予開源或使用授權。未經著作權人書面許可，不得複製、修改、散布、重新部署或用於其他專案。
 
 完整條款請參閱 [`LICENSE`](./LICENSE)。
+
+
+多個 1 對 1 聊天室可同時在背景嘗試 Direct P2P。Nostr 只要任一 Relay 成功連線即可立即使用，其餘 Relay 會繼續背景同步。

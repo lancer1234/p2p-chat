@@ -17,7 +17,7 @@ export class NostrManager {
     this.pool = new window.NostrTools.SimplePool();
     this.connectedRelaysStatus = this.relayUrls.map(() => false);
     this.seenEvents = new Set();
-    this.currentSub = null;
+    this.subscriptions = new Map();
 
     this.onStatusChange = null;
     this.onAnyRelayConnected = null;
@@ -78,13 +78,13 @@ export class NostrManager {
         if (changed || this.onStatusChange) {
           if (this.onStatusChange) this.onStatusChange(index, connected);
         }
+        if (connected && this.onAnyRelayConnected) {
+          this.onAnyRelayConnected(url, index);
+        }
         return connected;
       });
 
       const results = await Promise.all(checks);
-      if (results.some(Boolean) && this.onAnyRelayConnected) {
-        this.onAnyRelayConnected();
-      }
       return results;
     })();
 
@@ -180,7 +180,7 @@ export class NostrManager {
   }
 
   subscribeToFriend(myPk, friendPk, onMessageReceived) {
-    this.unsubscribeFromFriend();
+    this.unsubscribeFromFriend(friendPk);
 
     const liveUrls = this.getLiveUrls();
     if (liveUrls.length === 0) return false;
@@ -192,9 +192,10 @@ export class NostrManager {
     };
     if (friendPk !== 'any') filter.authors = [friendPk];
 
-    this.currentSub = this.pool.sub(liveUrls, [filter]);
+    const sub = this.pool.sub(liveUrls, [filter]);
+    this.subscriptions.set(friendPk, sub);
 
-    this.currentSub.on('event', event => {
+    sub.on('event', event => {
       if (!event || !event.id || !event.content || !event.pubkey) return;
       if (this.seenEvents.has(event.id)) return;
 
@@ -207,22 +208,32 @@ export class NostrManager {
       onMessageReceived(event.content, event.pubkey, event);
     });
 
-    this.currentSub.on('eose', () => {
-      console.log('[Nostr] EOSE - signaling cache synchronized.');
+    sub.on('eose', () => {
+      console.log(`[Nostr] EOSE - signaling cache synchronized (${friendPk}).`);
     });
 
     return true;
   }
 
-  unsubscribeFromFriend() {
-    if (!this.currentSub) return;
-    try {
-      if (typeof this.currentSub.unsub === 'function') this.currentSub.unsub();
-      else if (typeof this.currentSub.close === 'function') this.currentSub.close();
-    } catch (error) {
-      console.warn('[Nostr] unsubscribe failed', error);
+  unsubscribeFromFriend(friendPk = null) {
+    const closeSub = sub => {
+      if (!sub) return;
+      try {
+        if (typeof sub.unsub === 'function') sub.unsub();
+        else if (typeof sub.close === 'function') sub.close();
+      } catch (error) {
+        console.warn('[Nostr] unsubscribe failed', error);
+      }
+    };
+
+    if (friendPk !== null && friendPk !== undefined) {
+      closeSub(this.subscriptions.get(friendPk));
+      this.subscriptions.delete(friendPk);
+      return;
     }
-    this.currentSub = null;
+
+    for (const sub of this.subscriptions.values()) closeSub(sub);
+    this.subscriptions.clear();
   }
 
   clearAllSubscriptions() {

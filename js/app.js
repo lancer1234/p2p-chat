@@ -62,6 +62,7 @@ let directRtcConfig = {
 };
 let relayRtcConfig = { ...directRtcConfig };
 let rtcConfig = directRtcConfig;
+const backgroundSessions = new Map();
 
 function setRelayFallbackVisible(visible) {
     const bar = document.getElementById('relay-fallback-bar');
@@ -132,6 +133,7 @@ function transitionToState(nextState) {
     } else if (nextState === STATE_READY) {
         document.getElementById('setup-container').style.display = 'block';
         renderChatList();
+        if (isNostrReady) queueMicrotask(startAllBackgroundConnections);
         const pairActions = document.getElementById('pair-actions');
         if (pairActions) pairActions.style.display = 'none';
     } else if (nextState === STATE_CREATE_QR) {
@@ -356,14 +358,17 @@ async function executeUnlockFlow() {
 document.getElementById('btn-unlock').addEventListener('click', executeUnlockFlow);
 
 function bootstrapApp() {
-    const onAnyRelayConnectedTrigger = function() {
-        if (!isNostrReady) logger.debug('✅ 至少一個 Nostr relay 已接通。');
+    const onAnyRelayConnectedTrigger = function(url) {
+        const wasReady = isNostrReady;
         isNostrReady = true;
+        if (!wasReady) logger.debug(`✅ Nostr 已可用：${url || '至少一個 relay'} 已接通；其餘 relay 繼續背景檢查。`);
+        startAllBackgroundConnections();
     };
 
     nostr.connect(updateRelayUIIndicator, onAnyRelayConnectedTrigger)
         .then(function() {
-            isNostrReady = true;
+            isNostrReady = nostr.hasLiveRelay();
+            if (isNostrReady) startAllBackgroundConnections();
         })
         .catch(function(error) {
             isNostrReady = false;
@@ -444,8 +449,225 @@ function renderChatList() {
     });
 }
 
+
+function getBackgroundSession(friendPk) {
+    let session = backgroundSessions.get(friendPk);
+    if (!session) {
+        session = {
+            friendPk,
+            peer: null,
+            negotiationId: null,
+            reconnectTimer: null,
+            attemptTimer: null,
+            attempt: 0,
+            connected: false,
+            subscribed: false
+        };
+        backgroundSessions.set(friendPk, session);
+    }
+    return session;
+}
+
+function clearBackgroundTimers(session) {
+    if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
+    if (session.attemptTimer) clearTimeout(session.attemptTimer);
+    session.reconnectTimer = null;
+    session.attemptTimer = null;
+}
+
+function destroyBackgroundPeer(session) {
+    clearBackgroundTimers(session);
+    if (!session.peer) return;
+    try {
+        session.peer.removeAllListeners();
+        session.peer.destroy();
+    } catch (_) {}
+    session.peer = null;
+    session.connected = false;
+}
+
+function stopBackgroundSession(friendPk) {
+    const session = backgroundSessions.get(friendPk);
+    if (!session) {
+        nostr.unsubscribeFromFriend(friendPk);
+        return;
+    }
+    destroyBackgroundPeer(session);
+    nostr.unsubscribeFromFriend(friendPk);
+    backgroundSessions.delete(friendPk);
+}
+
+function scheduleBackgroundReconnect(friendPk, reason = 'retry') {
+    const session = getBackgroundSession(friendPk);
+    if (session.reconnectTimer || session.connected) return;
+    if (currentFriendPk === friendPk && currentSystemState !== STATE_READY) return;
+
+    const exponent = Math.min(session.attempt, 4);
+    const delay = Math.min(APP_CONFIG.reconnectBaseDelayMs * Math.pow(2, exponent), APP_CONFIG.reconnectMaxDelayMs);
+    session.reconnectTimer = setTimeout(() => {
+        session.reconnectTimer = null;
+        startBackgroundSession(friendPk, reason);
+    }, delay);
+}
+
+async function sendBackgroundSignaling(friendPk, type, signal, negotiationId) {
+    try {
+        const encrypted = await encodeSignaling(friendPk, { type, signal, negotiationId });
+        await nostr.sendEvent(myKeyPair.sk, friendPk, encrypted);
+    } catch (error) {
+        logger.error(`背景 ${type} signaling 發送失敗`, error);
+        const session = getBackgroundSession(friendPk);
+        session.attempt += 1;
+        scheduleBackgroundReconnect(friendPk, 'signaling-failed');
+    }
+}
+
+function createBackgroundPeer(friendPk, { initiator, signalType, negotiationId }) {
+    const session = getBackgroundSession(friendPk);
+    destroyBackgroundPeer(session);
+    session.negotiationId = negotiationId || randomId();
+    session.connected = false;
+
+    const peer = new window.SimplePeer({
+        initiator,
+        trickle: false,
+        config: directRtcConfig
+    });
+    session.peer = peer;
+
+    if (signalType) {
+        peer.on('signal', signalData => {
+            if (session.peer !== peer || peer.destroyed) return;
+            sendBackgroundSignaling(friendPk, signalType, signalData, session.negotiationId);
+        });
+    }
+
+    peer.on('connect', () => {
+        if (session.peer !== peer) return;
+        clearBackgroundTimers(session);
+        session.connected = true;
+        session.attempt = 0;
+        logger.debug(`🟢 背景 Direct P2P 已連線：${friendPk.slice(0, 8)}`);
+        renderChatList();
+    });
+
+    peer.on('data', data => {
+        if (session.peer !== peer) return;
+        const text = data.toString();
+        Storage.saveMessageLog(friendPk, text, 'friend');
+        Storage.touchFriend(friendPk);
+        if (currentFriendPk === friendPk && currentSystemState !== STATE_READY) appendMessage(text, 'friend');
+        else renderChatList();
+    });
+
+    const retry = reason => {
+        if (session.peer !== peer) return;
+        session.connected = false;
+        session.peer = null;
+        session.attempt += 1;
+        renderChatList();
+        scheduleBackgroundReconnect(friendPk, reason);
+    };
+    peer.on('close', () => retry('close'));
+    peer.on('error', () => retry('error'));
+
+    session.attemptTimer = setTimeout(() => {
+        if (session.peer !== peer || session.connected) return;
+        try { peer.destroy(); } catch (_) {}
+        if (session.peer === peer) session.peer = null;
+        session.attempt += 1;
+        scheduleBackgroundReconnect(friendPk, 'timeout');
+    }, APP_CONFIG.peerAttemptTimeoutMs);
+
+    return peer;
+}
+
+function subscribeBackgroundSession(friendPk) {
+    const session = getBackgroundSession(friendPk);
+    nostr.subscribeToFriend(myKeyPair.pk, friendPk, async (rawContent, authorPk) => {
+        if (authorPk !== friendPk || !rawContent || rawContent.length > 100000) return;
+        if (currentFriendPk === friendPk && currentSystemState !== STATE_READY) return;
+        try {
+            const data = await decodeSignaling(rawContent, authorPk);
+            if (!data) return;
+
+            if (data.type === 'reconnect-offer') {
+                if (session.connected && session.peer && session.peer.connected) return;
+                const negotiationId = data.negotiationId || randomId();
+                const peer = createBackgroundPeer(friendPk, {
+                    initiator: false,
+                    signalType: 'reconnect-answer',
+                    negotiationId
+                });
+                peer.signal(data.signal);
+                return;
+            }
+
+            if (data.type === 'reconnect-answer') {
+                if (data.negotiationId && session.negotiationId && data.negotiationId !== session.negotiationId) return;
+                if (session.peer && !session.peer.destroyed) session.peer.signal(data.signal);
+                return;
+            }
+
+            if (data.type === 'leave') {
+                destroyBackgroundPeer(session);
+                session.attempt += 1;
+                scheduleBackgroundReconnect(friendPk, 'peer-left');
+            }
+        } catch (error) {
+            logger.error('背景 signaling 處理失敗', error);
+        }
+    });
+    session.subscribed = true;
+}
+
+function startBackgroundSession(friendPk, reason = 'background-start') {
+    if (!isNostrReady || !isValidPubkey(friendPk) || !myKeyPair.pk) return;
+    if (currentFriendPk === friendPk && currentSystemState !== STATE_READY) return;
+
+    const session = getBackgroundSession(friendPk);
+    subscribeBackgroundSession(friendPk);
+    if (session.peer && session.peer.connected) {
+        session.connected = true;
+        return;
+    }
+    if (session.peer && !session.peer.destroyed) return;
+
+    if (myKeyPair.pk > friendPk) {
+        session.attempt += 1;
+        session.negotiationId = randomId();
+        logger.debug(`🔁 背景 reconnect ${friendPk.slice(0, 8)} #${session.attempt} (${reason})`);
+        createBackgroundPeer(friendPk, {
+            initiator: true,
+            signalType: 'reconnect-offer',
+            negotiationId: session.negotiationId
+        });
+    } else {
+        scheduleBackgroundReconnect(friendPk, 'follower-wait');
+    }
+}
+
+function startAllBackgroundConnections() {
+    if (!isNostrReady || !myKeyPair.pk) return;
+    const chats = Storage.getChatList();
+    const wanted = new Set(chats.map(chat => chat.pk));
+
+    for (const [pk] of backgroundSessions) {
+        if (!wanted.has(pk) || (pk === currentFriendPk && currentSystemState !== STATE_READY)) {
+            stopBackgroundSession(pk);
+        }
+    }
+
+    chats.forEach(chat => {
+        if (chat.pk !== currentFriendPk || currentSystemState === STATE_READY) {
+            startBackgroundSession(chat.pk);
+        }
+    });
+}
+
 function openConversation(friendPk) {
     if (!isValidPubkey(friendPk)) return;
+    stopBackgroundSession(friendPk);
     if (!isNostrReady) {
         alert('矩陣仍在同步中，請稍候。');
         return;
@@ -477,10 +699,12 @@ async function returnToChatList() {
     currentFriendPk = null;
     updateCurrentPeerLabel();
     transitionToState(STATE_READY);
+    startAllBackgroundConnections();
 }
 
 function deleteConversation(friendPk) {
     if (!isValidPubkey(friendPk)) return;
+    stopBackgroundSession(friendPk);
     const name = getFriendDisplayName(friendPk);
     if (!confirm(`刪除「${name}」？\n\n本機聊天紀錄也會一起刪除。`)) return;
     Storage.clearSession(friendPk);
@@ -551,7 +775,8 @@ function forceDestroyPeer() {
 }
 
 function clearSessionState() {
-    nostr.clearAllSubscriptions();
+    nostr.unsubscribeFromFriend(GLOBAL_CHANNEL);
+    if (currentFriendPk) nostr.unsubscribeFromFriend(currentFriendPk);
     if (qrTimeoutTimer) clearTimeout(qrTimeoutTimer);
     qrTimeoutTimer = null;
     forceDestroyPeer();
@@ -1123,6 +1348,8 @@ async function recoverAfterNetworkChange(reason) {
     } catch (error) {
         isNostrReady = false;
     }
+
+    startAllBackgroundConnections();
 
     if (currentFriendPk && currentSystemState !== STATE_READY) {
         transitionToState(STATE_CONNECTING);
