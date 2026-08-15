@@ -522,7 +522,10 @@ document.getElementById('btn-use-relay').addEventListener('click', async functio
 });
 
 document.getElementById('input-msg').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') sendMessage();
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
+        sendMessage();
+    }
 });
 
 function clearPeerTimers() {

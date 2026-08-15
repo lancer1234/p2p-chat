@@ -20,7 +20,6 @@
             --accent: #00FFCC;
             --danger: #EF4444;
             --warning: #F59E0B;
-            --app-height: 100dvh;
         }
 
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -114,12 +113,12 @@
             min-height: 0;
             background: var(--bg);
             flex-direction: column;
-            position: absolute;
+            position: fixed;
             top: 0;
             left: 0;
             right: 0;
-            transform: translate3d(0, var(--vv-top, 0px), 0);
-            will-change: transform, height;
+            transform: none;
+            will-change: height;
             z-index: 100;
             overflow: hidden;
         }
@@ -152,7 +151,6 @@
             overscroll-behavior: contain;
             -webkit-overflow-scrolling: touch;
             padding: 24px clamp(16px, 3vw, 48px);
-            padding-bottom: calc(24px + var(--keyboard-height));
             display: flex;
             flex-direction: column;
             gap: 16px;
@@ -174,8 +172,43 @@
             background: var(--bg);
             gap: 12px;
         }
-        #input-msg { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--border); padding: 12px 16px; color: #FFF; font-size: 16px; border-radius: 20px; }
-        #input-msg:focus { outline: none; border-color: rgba(0, 255, 204, 0.4); }
+        .ios-keyboard-proxy {
+            position: fixed;
+            top: calc(env(safe-area-inset-top) + 76px);
+            left: 50%;
+            width: 2px;
+            height: 2px;
+            min-width: 0;
+            opacity: 0.01;
+            padding: 0;
+            margin: 0;
+            border: 0;
+            background: transparent;
+            color: transparent;
+            caret-color: transparent;
+            font-size: 16px;
+            pointer-events: none;
+            z-index: -1;
+        }
+        .input-msg-display {
+            flex: 1;
+            min-width: 0;
+            min-height: 42px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            padding: 10px 16px;
+            color: #FFF;
+            font-size: 16px;
+            line-height: 20px;
+            border-radius: 20px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: text;
+            user-select: none;
+        }
+        .input-msg-display:empty::before { content: attr(data-placeholder); color: #8A8A92; }
+        .input-msg-display.focused { border-color: rgba(0, 255, 204, 0.4); }
         #btn-send { background: transparent; color: var(--accent); border: none; padding: 8px 12px; font-weight: 600; font-size: 0.9rem; cursor: pointer; width: auto; flex: 0 0 auto; }
 
         @media (max-width: 767px) {
@@ -264,7 +297,8 @@
             <button id="btn-use-relay">使用加密 Relay 連線</button>
         </div>
         <div id="chat-input-area">
-            <input type="text" id="input-msg" placeholder="輸入訊息..." autocomplete="off">
+            <input type="text" id="input-msg" class="ios-keyboard-proxy" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" aria-label="輸入訊息">
+            <div id="input-msg-display" class="input-msg-display" role="textbox" aria-label="輸入訊息" data-placeholder="輸入訊息..."></div>
             <button id="btn-send">發送</button>
         </div>
     </div>
@@ -274,53 +308,64 @@
     <script>
         (function() {
             const root = document.documentElement;
-            const chat = document.getElementById('chat-interface');
-            const input = document.getElementById('input-msg');
+            const proxy = document.getElementById('input-msg');
+            const display = document.getElementById('input-msg-display');
             const messages = document.getElementById('chat-messages');
+            const send = document.getElementById('btn-send');
             let raf = 0;
 
-            function applyVisualViewport() {
+            function syncDisplay() {
+                display.textContent = proxy.value || '';
+            }
+
+            function applyViewportHeight() {
                 raf = 0;
                 const vv = window.visualViewport;
                 const height = Math.round(vv ? vv.height : window.innerHeight);
-                const top = Math.max(0, Math.round(vv ? vv.offsetTop : 0));
-
-                const bottomGap = messages
-                    ? Math.max(0, messages.scrollHeight - messages.scrollTop - messages.clientHeight)
-                    : 0;
-                const keepAtBottom = document.activeElement === input && bottomGap < 96;
-
                 root.style.setProperty('--vv-height', `${height}px`);
-                root.style.setProperty('--vv-top', `${top}px`);
-
-                if (keepAtBottom && messages) {
-                    requestAnimationFrame(function() {
-                        messages.scrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight - bottomGap);
-                    });
-                }
             }
 
-            function scheduleVisualViewport() {
+            function scheduleViewportHeight() {
                 if (raf) return;
-                raf = requestAnimationFrame(applyVisualViewport);
+                raf = requestAnimationFrame(applyViewportHeight);
             }
 
-            scheduleVisualViewport();
-            window.addEventListener('resize', scheduleVisualViewport, { passive: true });
-            window.addEventListener('orientationchange', scheduleVisualViewport, { passive: true });
+            function focusKeyboard(e) {
+                if (e) e.preventDefault();
+                try { proxy.focus({ preventScroll: true }); } catch (_) { proxy.focus(); }
+                display.classList.add('focused');
+                scheduleViewportHeight();
+            }
 
+            display.addEventListener('pointerdown', focusKeyboard);
+            display.addEventListener('click', focusKeyboard);
+            proxy.addEventListener('input', syncDisplay);
+            proxy.addEventListener('focus', function() {
+                display.classList.add('focused');
+                scheduleViewportHeight();
+            });
+            proxy.addEventListener('blur', function() {
+                display.classList.remove('focused');
+                scheduleViewportHeight();
+            });
+
+            // app.js clears proxy.value after sending; refresh the visible shell after its handler runs.
+            send.addEventListener('click', function() { setTimeout(syncDisplay, 0); });
+            proxy.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.isComposing) setTimeout(syncDisplay, 0);
+            });
+
+            scheduleViewportHeight();
+            window.addEventListener('resize', scheduleViewportHeight, { passive: true });
+            window.addEventListener('orientationchange', scheduleViewportHeight, { passive: true });
             if (window.visualViewport) {
-                window.visualViewport.addEventListener('resize', scheduleVisualViewport, { passive: true });
-                window.visualViewport.addEventListener('scroll', scheduleVisualViewport, { passive: true });
+                window.visualViewport.addEventListener('resize', scheduleViewportHeight, { passive: true });
             }
-
-            input.addEventListener('focus', scheduleVisualViewport);
-            input.addEventListener('blur', scheduleVisualViewport);
         })();
     </script>
 
     <script type="module">
-        const versionStamp = "20260815-v26-visual-viewport-shell";
+        const versionStamp = "20260815-v27-ios-proxy-input";
         import(`./js/app.js?v=${versionStamp}`).catch(console.error);
     </script>
 </body>
