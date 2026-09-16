@@ -24,7 +24,7 @@ export class NostrManager {
     this.healthTimer = null;
     this.connectInFlight = null;
 
-    // 所有 signaling 都排隊送，絕不再用「5 秒內直接 return」的方式丟封包。
+    // Queue signaling so bursts do not drop packets.
     this.outboundQueue = [];
     this.queueRunning = false;
   }
