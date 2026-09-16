@@ -1,5 +1,4 @@
-// WebRTC 輔助工具。
-// 主連線生命週期仍由 app.js 控制，這裡集中放 diagnostics / candidate 判讀。
+// WebRTC diagnostics and ICE candidate helpers.
 
 export function createP2PConnection(isInitiator, onSignal, onConnect, onData, config) {
   const peer = new window.SimplePeer({
